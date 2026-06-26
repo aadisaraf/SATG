@@ -291,3 +291,48 @@ class SATGTrainer:
 - lr_scheduler.step() called per iteration
 - All metrics logged to WandB
 - Best checkpoint saved by val mIoU
+
+---
+
+## 7. `evaluation/evaluator.py` — Evaluator
+
+```python
+class Evaluator:
+    def __init__(self, cfg: OmegaConf) -> None:
+        """Initialize evaluator from config.
+        
+        Args:
+            cfg: Config with num_classes=19, ignore_index=255, eval_interval
+        """
+    
+    def evaluate(
+        self,
+        model: nn.Module,  # MUST be student model, NOT EMA teacher
+        dataloader: DataLoader,
+    ) -> Dict[str, float]:
+        """Run inference on Cityscapes val split and compute mIoU.
+        
+        Args:
+            model: Student model to evaluate (NOT the EMA teacher)
+            dataloader: Cityscapes val split (500 images with GT labels)
+        
+        Returns:
+            Dict with keys: 'mIoU', 'per_class_iou' (19-element array),
+            'ignore_index' pixels excluded from computation
+        
+        Behavior:
+            1. Set model to eval mode
+            2. For each val image: forward pass → predicted class map
+            3. Build per-class confusion matrix (predicted vs ground truth)
+            4. Exclude pixels where ground truth == 255
+            5. Compute per-class IoU = TP / (TP + FP + FN)
+            6. mIoU = mean of 19 per-class IoU values
+        """
+```
+
+### Invariants
+- Evaluation uses student model only (NOT EMA teacher)
+- ignore_index=255 pixels excluded from IoU computation
+- mIoU = mean over all 19 standard Cityscapes classes
+- Evaluation ONLY on Cityscapes validation split (500 images)
+- Evaluation on training images is prohibited

@@ -9,10 +9,10 @@ After Phase 0 is complete, tasks are distributed as follows:
 
 | Subagent | Scope | Tasks |
 |----------|-------|-------|
-| **Primary** | PHASE 1 (data loaders), PHASE 5 (training loop), PHASE 6 (eval), PHASE 7 (viz), PHASE 7.5 (cloud scripts), PHASE 8–10 | T006–T011, T028–T033, T034–T036, T037–T039, T039A–T039E, T040–T047, T048–T050 |
+| **Primary** | PHASE 1 (data loaders), PHASE 5 (training loop), PHASE 6 (eval), PHASE 7 (viz), PHASE 7.5 (cloud scripts), PHASE 8–10 | T006–T011, T009b, T010b, T028–T033, T031b, T031c, T033b, T034–T036, T037–T039, T039A–T039E, T040–T047, T047b, T048–T050, T050b, T_FINAL |
 | **Subagent A** | PHASE 2 (structural_prior.py + tests) | T012–T014 |
-| **Subagent B** | PHASE 2 (trust_gate.py + tests) | T015–T017 |
-| **Subagent C** | PHASE 3 (segmentation.py + ema.py + tests) | T018–T023 |
+| **Subagent B** | PHASE 2 (trust_gate.py + tests) + PHASE 2 (losses.py) | T015–T019 |
+| **Subagent C** | PHASE 3 (segmentation.py + ema.py + tests) | T020–T023 |
 | **Primary** | PHASE 4 (precompute script) | T024–T027 |
 
 Subagents A, B, C run in parallel after Phase 0 completes. Primary handles PHASE 1, 4, 5–10 sequentially.
@@ -25,11 +25,15 @@ Subagents A, B, C run in parallel after Phase 0 completes. Primary handles PHASE
 
 - [ ] T002 — — Create `pyproject.toml` with black (line-length=100), flake8, and pytest-cov config. Create `.coveragerc` with `source = ["satg", "models", "data", "training", "evaluation"]` and `fail_under = 80`. Files: `pyproject.toml`, `.coveragerc`. Estimated time: 10–15 min. Acceptance Criterion: `black --check .` and `flake8` pass on empty files; `pytest --co` discovers test directory. Subagent hint: Primary.
 
+- [ ] T002b — — Write coverage enforcement test: run `pytest --cov=satg --cov=models --cov=data --cov=training --cov=evaluation --cov-fail-under=80` and verify it passes. Files: (validation only, no new files). Estimated time: 10–15 min. Acceptance Criterion: Coverage report shows ≥80% line coverage for all target packages. Subagent hint: Primary.
+
 - [ ] T003 — — Create `requirements.txt` with pinned dependencies: torch>=2.7.0, torchvision>=0.22, opencv-python>=4.x, numpy>=1.24, omegaconf>=2.3, wandb, pytest, pytest-cov, tqdm, black, flake8. Files: `requirements.txt`. Estimated time: 5–10 min. Acceptance Criterion: `pip install -r requirements.txt` succeeds on a fresh environment. Subagent hint: Primary.
 
 - [ ] T004 [P] — — Create master config `configs/default.yaml` with all hyperparameters: seed=42, seeds=[42,1337,2024], structural_prior params (edge thresholds, kernel sizes, weights), trust_gate params (tau_conf=0.9, tau_struct=0.6, soft params), training params (lr=6e-4, head_lr=6e-3, iterations=40000, batch_size=1, crop_size=[512,512], eval_interval=2000, lambda_target=1.0, ema_momentum=0.999), model params (backbone=resnet50, num_classes=19). Files: `configs/default.yaml`. Estimated time: 15–20 min. Acceptance Criterion: `OmegaConf.load("configs/default.yaml")` resolves without error; all constitution §1.3 hyperparameters present. Subagent hint: Primary.
 
-- [ ] T005 [P] — — Create variant configs: `configs/satg_hard.yaml`, `configs/satg_soft.yaml`, `configs/baseline_mean_teacher.yaml`, `configs/source_only.yaml` — each extending default.yaml with overrides. Files: `configs/satg_hard.yaml`, `configs/satg_soft.yaml`, `configs/baseline_mean_teacher.yaml`, `configs/source_only.yaml`. Estimated time: 15–20 min. Acceptance Criterion: Each config loads via OmegaConf and contains expected override keys; source_only has target_loss_weight=0.0. Subagent hint: Primary.
+- [ ] T005 — — Create variant configs: `configs/satg_hard.yaml`, `configs/satg_soft.yaml`, `configs/baseline_mean_teacher.yaml`, `configs/source_only.yaml` — each extending default.yaml with overrides. Files: `configs/satg_hard.yaml`, `configs/satg_soft.yaml`, `configs/baseline_mean_teacher.yaml`, `configs/source_only.yaml`. Estimated time: 15–20 min. Acceptance Criterion: Each config loads via OmegaConf and contains expected override keys; source_only has lambda_target=0.0. Subagent hint: Primary.
+
+- [ ] T005b — — Write config isolation verification tests in `tests/test_configs.py`: test source_only has lambda_target=0.0, test mean_teacher has no heatmap loading keys, test all 4 variant configs share identical backbone/optimizer/source data keys and differ only in target loss mechanism. Files: `tests/test_configs.py`. Estimated time: 15–20 min. Acceptance Criterion: All assertions pass; any config deviation from isolation contract raises AssertionError. Additionally verify that mean_teacher config, when parsed by trainer, results in zero heatmap file I/O (runtime isolation check). Subagent hint: Primary.
 
 **Checkpoint**: Phase 0 complete — project structure, configs, and tooling ready. Subagents A, B, C can now begin in parallel.
 
@@ -45,7 +49,11 @@ Subagents A, B, C run in parallel after Phase 0 completes. Primary handles PHASE
 
 - [ ] T009 — [US1] Implement `data/gta5_loader.py` GTA5Dataset class: reads preprocessed index-map labels, applies source augmentation (spatial + color jitter per research.md), returns (image tensor [3,512,512], label tensor [512,512]). Files: `data/gta5_loader.py`. Estimated time: 30–40 min. Acceptance Criterion: All GTA5 loader tests pass. Subagent hint: Primary.
 
+- [ ] T009b — [US1] Write tests for and implement Rare Class Sampling for source batches in `data/gta5_loader.py` or a separate `data/rare_class_sampler.py`: test that source batch class frequencies are balanced according to Rare Class Sampling strategy (inverse frequency weighting), test that the sampler is configurable via YAML. Files: `tests/test_data_loaders.py`, `data/gta5_loader.py` or `data/rare_class_sampler.py`. Estimated time: 30–40 min. Acceptance Criterion: Source batch class distribution is more uniform than naive sampling; sampler is config-driven. Subagent hint: Primary.
+
 - [ ] T010 — [US1] Write tests for Cityscapes loader in `tests/test_data_loaders.py`: test train split returns (image, heatmap) tuples, test val split returns (image, label) tuples, test heatmap shape matches image spatial dims, test heatmap values in [0,1]. Files: `tests/test_data_loaders.py`. Estimated time: 20–30 min. Acceptance Criterion: Tests exist and FAIL (red phase). Subagent hint: Primary.
+
+- [ ] T010b — [US1/RISK-04] Write augmentation consistency test in `tests/test_data_loaders.py`: (a) apply known spatial transforms (resize, crop, flip) and verify image and heatmap output dimensions match, (b) compare transform parameter sets for image vs heatmap — both must receive identical spatial distortion, (c) verify no color augmentation (jitter, blur, grayscale) is applied to target images, (d) verify heatmap values remain in [0,1] after augmentation. Files: `tests/test_data_loaders.py`. Estimated time: 15–20 min. Acceptance Criterion: Test explicitly verifies spatial transform identity between image and heatmap; any mismatch raises AssertionError. This directly validates RISK-04 (augmentation mismatch). Subagent hint: Primary.
 
 - [ ] T011 — [US1] Implement `data/cityscapes_loader.py` CityscapesDataset class: loads images + precomputed heatmaps for train split, images + gtFine_labelTrainIds for val split, spatial-only augmentation for target (resize, crop, flip) applied identically to image and heatmap. Files: `data/cityscapes_loader.py`. Estimated time: 30–40 min. Acceptance Criterion: All Cityscapes loader tests pass; heatmap augmentation matches image augmentation. Subagent hint: Primary.
 
@@ -69,9 +77,9 @@ Subagents A, B, C run in parallel after Phase 0 completes. Primary handles PHASE
 
 - [ ] T017 [P] — [US4] Implement `satg/trust_gate.py` SoftTrustGate class: sigmoid(β₀ + β₁·confidence − β₂·structure). Extend `tests/test_trust_gate.py` with soft variant tests. Files: `satg/trust_gate.py`, `tests/test_trust_gate.py`. Estimated time: 20–30 min. Acceptance Criterion: SoftTrustGate tests pass; monotonicity verified. Subagent hint: Subagent B.
 
-- [ ] T018 — [US3] Write tests for SATGLoss in `tests/test_losses.py`: test output is scalar ≥ 0, test zero trust weights → loss = 0.0, test no NaN/Inf, test ignore_index=255 excluded. Files: `tests/test_losses.py`. Estimated time: 20–30 min. Acceptance Criterion: Tests exist and FAIL (red phase). Subagent hint: Subagent A (or Subagent B after T017).
+- [ ] T018 — [US3] Write tests for SATGLoss in `tests/test_losses.py`: test output is scalar ≥ 0, test zero trust weights → loss = 0.0, test no NaN/Inf, test ignore_index=255 excluded. Files: `tests/test_losses.py`. Estimated time: 20–30 min. Acceptance Criterion: Tests exist and FAIL (red phase). Subagent hint: Subagent B (after T017; depends on trust_gate.py).
 
-- [ ] T019 — [US3] Implement `satg/losses.py` SATGLoss class: per-pixel CE with reduction='none', weighted sum with trust_weights, zero-weight guard. Files: `satg/losses.py`. Estimated time: 20–30 min. Acceptance Criterion: All SATGLoss tests pass; zero-weight edge case returns 0.0. Subagent hint: Subagent A (or Subagent B).
+- [ ] T019 — [US3] Implement `satg/losses.py` SATGLoss class: per-pixel CE with reduction='none', weighted sum with trust_weights, zero-weight guard. Files: `satg/losses.py`. Estimated time: 20–30 min. Acceptance Criterion: All SATGLoss tests pass; zero-weight edge case returns 0.0. Subagent hint: Subagent B (after T018; depends on trust_gate.py and test interface).
 
 **Checkpoint**: Phase 2 complete — structural prior, trust gates, and loss function all tested and working independently.
 
@@ -117,9 +125,15 @@ Subagents A, B, C run in parallel after Phase 0 completes. Primary handles PHASE
 
 - [ ] T031 — [US5] Add logging: WandB init with config, per-step logging of total_loss, source_loss, target_loss, trust_coverage_ratio; evaluation at eval_interval; checkpoint saving (last.pth every eval, best.pth on mIoU improvement). Files: `training/trainer.py`. Estimated time: 30–40 min. Acceptance Criterion: WandB receives logged metrics; checkpoint files created. Subagent hint: Primary.
 
+- [ ] T031b — [US5] Add per-class trust coverage logging to `training/trainer.py`: for each of the 19 Cityscapes classes, compute the fraction of pixels belonging to that class that are trusted by the trust gate. Log all 19 per-class coverage ratios to WandB as separate metrics (e.g., `coverage/class_road`, `coverage/class_sidewalk`, etc.). This detects RISK-01 (class bias in trusted pixels). Files: `training/trainer.py`. Estimated time: 20–30 min. Acceptance Criterion: WandB receives 19 per-class coverage metrics per logging step; coverage ratios sum to overall trust_coverage_ratio. Subagent hint: Primary.
+
+- [ ] T031c — [US9/RISK-01] Compute per-class trust coverage summary: after training, aggregate per-class coverage ratios from WandB logs (or training CSV exports). Compute mean, std, min, max trust coverage per class across training iterations. Include summary table in EXPERIMENTS.md. Flag any class with <10% or >90% mean coverage as potential bias. Files: EXPERIMENTS.md, `visualization/plot_metrics.py` (extend). Estimated time: 15–20 min. Acceptance Criterion: Per-class coverage summary table in EXPERIMENTS.md; bias classes flagged; overall coverage stats included. Subagent hint: Primary.
+
 - [ ] T032 — [US5] Add seed management: set np.random.seed, torch.manual_seed, torch.cuda.manual_seed_all, random.seed at start of train(); add torch.backends.cudnn.deterministic/benchmark settings. Files: `training/trainer.py`. Estimated time: 10–15 min. Acceptance Criterion: Same seed → same training trajectory (losses match within tolerance). Subagent hint: Primary.
 
 - [ ] T033 — — Run trainer tests to verify all pass. Files: (no new files). Estimated time: 10–15 min. Acceptance Criterion: `pytest tests/test_trainer.py -v` all pass. Subagent hint: Primary.
+
+- [ ] T033b — — Write target label leakage tests in `tests/test_data_leakage.py`: (1) test CityscapesDataset train split __getitem__ returns (image, heatmap) with NO label tensor, (2) test teacher forward pass operates under torch.no_grad() (zero gradient computation), (3) test trainer never passes target ground truth labels to any loss function. Files: `tests/test_data_leakage.py`. Estimated time: 20–30 min. Acceptance Criterion: All 3 tests pass; any attempt to access target labels in train mode raises an error. Subagent hint: Primary.
 
 **Checkpoint**: Phase 5 complete — training loop integrated and tested.
 
@@ -179,7 +193,7 @@ Subagents A, B, C run in parallel after Phase 0 completes. Primary handles PHASE
 
 - [ ] T040 — [US6] Train Source Only baseline: `python -m training.trainer --config configs/source_only.yaml` for 40k iterations with seed=42. Record mIoU and per-class IoU. Files: EXPERIMENTS.md (append). Estimated time: 60–120 min (compute-bound). Acceptance Criterion: mIoU ~30% on Cityscapes val; results recorded in EXPERIMENTS.md with config snapshot. Subagent hint: Primary.
 
-- [ ] T041 — [US6] Train Standard Mean Teacher baseline: `python -m training.trainer --config configs/baseline_mean_teacher.yaml` for 40k iterations with seed=42. Record mIoU and per-class IoU. Files: EXPERIMENTS.md (append). Estimated time: 60–120 min (compute-bound). Acceptance Criterion: mIoU ~35-40% on Cityscapes val; results recorded in EXPERIMENTS.md with config snapshot. Subagent hint: Primary.
+- [ ] T041 — [US6] Train Standard Mean Teacher baseline: `python -m training.trainer --config configs/baseline_mean_teacher.yaml` for 40k iterations with seed=42. Record mIoU and per-class IoU. Files: EXPERIMENTS.md (append). Estimated time: 60–120 min (compute-bound). Acceptance Criterion: mIoU ~35-40% on Cityscapes val; results recorded in EXPERIMENTS.md with config snapshot; training logs confirm zero heatmap file I/O (mean_teacher uses confidence threshold only, no structural prior). Subagent hint: Primary.
 
 - [ ] T042 — — Run Source Only and Mean Teacher with seeds {1337, 2024} for 3-seed averaging per constitution §1.2. Files: EXPERIMENTS.md (update with mean±std). Estimated time: 120–240 min (compute-bound, can run 2 seeds in parallel). Acceptance Criterion: 3-seed mean±std reported for both baselines. Subagent hint: Primary.
 
@@ -199,7 +213,9 @@ Subagents A, B, C run in parallel after Phase 0 completes. Primary handles PHASE
 
 - [ ] T047 — — Ablation B: tau_conf sweep {0.80, 0.90, 0.95} with tau_struct=0.60 fixed (3 configs, seed=42 each). Ablation C: tau_struct sweep {0.40, 0.60, 0.70} with tau_conf=0.90 fixed (3 configs, seed=42 each). Ablation D: hard vs soft (best of each, seed=42). Files: `configs/ablation_tau_conf_*.yaml`, `configs/ablation_tau_struct_*.yaml`, EXPERIMENTS.md. Estimated time: 180–240 min. Acceptance Criterion: All ablation results in EXPERIMENTS.md; per-class IoU for top-5 affected classes. Subagent hint: Primary.
 
-- [ ] T048 — — Ablation E: Kernel σ ∈ {0.5, 1.0, 2.0} and variance window ∈ {7×7, 15×15, 31×31} (6 configs, seed=42 each). Files: `configs/ablation_kernel_*.yaml`, EXPERIMENTS.md. Estimated time: 180–240 min. Acceptance Criterion: All 6 kernel ablation results in EXPERIMENTS.md. Subagent hint: Primary.
+- [ ] T047b — [US9/RISK-03] Run combined tau_conf × tau_struct grid search: sweep tau_conf ∈ {0.85, 0.90, 0.95} × tau_struct ∈ {0.50, 0.60, 0.70} (9 configs, seed=42 each). Create combined ablation config files. Record mIoU and per-class IoU for all 9 configurations. This tests interaction effects between the two thresholds that independent sweeps (T047) cannot detect. Files: `configs/ablation_tau_grid_*.yaml`, EXPERIMENTS.md. Estimated time: 240–360 min. Acceptance Criterion: 9 ablation results in EXPERIMENTS.md; interaction effects visible in results table; best (tau_conf, tau_struct) pair identified. Subagent hint: Primary.
+
+- [ ] T048 — — Ablation E: Kernel σ ∈ {0.5, 1.0, 2.0} and variance window ∈ {7×7, 15×15, 31×31} (6 configs, seed=42 each). Files: `configs/ablation_kernel_*.yaml`, EXPERIMENTS.md. Estimated time: 180–240 min. Acceptance Criterion: All 6 kernel ablation results in EXPERIMENTS.md; results show kernel size affects mIoU, confirming RISK-02 (coarse prior) is a real factor; optimal kernel configuration identified and reported. Subagent hint: Primary.
 
 **Checkpoint**: Phase 9 complete — all main experiments and ablations finished.
 
@@ -210,6 +226,8 @@ Subagents A, B, C run in parallel after Phase 0 completes. Primary handles PHASE
 - [ ] T049 — — Write `README.md` with: project description, installation (pip install -r requirements.txt), dataset download instructions, precomputation command, training commands (all configs), evaluation command, visualization command, CLI syntax examples. Files: `README.md`. Estimated time: 30–40 min. Acceptance Criterion: README covers all sections per constitution §4.1; all CLI commands are syntactically correct. Subagent hint: Primary.
 
 - [ ] T050 — — Populate `EXPERIMENTS.md` with full comparison table: Method | mIoU (mean±std) | per-class IoU for all 19 classes | GPU type | training hours | GPU memory peak. Include all baselines, SATG variants, and ablation results. Files: `EXPERIMENTS.md`. Estimated time: 30–40 min. Acceptance Criterion: Table has all methods; all results have 3-seed mean±std; per-class IoU for all 19 classes. Subagent hint: Primary.
+
+- [ ] T050b — — Generate trust_coverage_ratio vs. iteration plot: read WandB logs or CSV exports, plot overall trust_coverage_ratio and per-class coverage ratios over training iterations, save as PNG to `visualizations/training_metrics/`. This visualizes that the trust gating mechanism is active and not collapsing. Files: `visualization/plot_metrics.py` or extend `visualization/visualize.py`. Estimated time: 15–20 min. Acceptance Criterion: PNG plots show coverage ratio trends over training; at least 2 plots generated (overall + per-class). Subagent hint: Primary.
 
 - [ ] T_FINAL — — Generate EXPERIMENTS.md comparison table and update README.md. Verify: (1) all ablation results from §3.1 present, (2) source-only baseline included, (3) compute documented per §1.7, (4) all configs logged per §1.3. Files: `EXPERIMENTS.md`, `README.md`. Estimated time: 20–30 min. Acceptance Criterion: EXPERIMENTS.md is complete with all methods; README.md has full usage guide. Subagent hint: Primary.
 
@@ -243,9 +261,9 @@ PHASE 9 ──→ PHASE 10 (needs all results)
 
 After PHASE 0 completes, the following run in parallel:
 - **Subagent A**: T012 → T013 → T014 (structural prior)
-- **Subagent B**: T015 → T016 → T017 (trust gate)
+- **Subagent B**: T015 → T016 → T017 → T018 → T019 (trust gate + loss)
 - **Subagent C**: T020 → T021, T022 → T023 (model + EMA)
-- **Primary**: T006 → T007 → T008 → T009 → T010 → T011 (data loaders), then T024 → T025 → T026 → T027 (precompute)
+- **Primary**: T006 → T007 → T008 → T009 → T010 → T010b → T011 (data loaders), then T024 → T025 → T026 → T027 (precompute)
 
 Within PHASE 2: T012 || T015 (different files, no deps), T013 || T016, T014 || T017
 Within PHASE 3: T020 || T022 (different files, no deps)
@@ -273,3 +291,7 @@ Within PHASE 3: T020 || T022 (different files, no deps)
 - PHASE 7.5 generates all cloud scripts — after this, PHASE 8–9 are user-executed on cloud
 - Compute-bound tasks (PHASE 8–9) have wide time estimates; actual time depends on GPU
 - Cloud cost estimate: ~$300–500 for full PHASE 8+9 on A100 instances
+- **Evaluation model**: Final mIoU uses student model (not EMA teacher), per spec.md and plan.md
+- **New tasks added**: T002b (coverage enforcement), T005b (config isolation), T009b (Rare Class Sampling), T010b (augmentation consistency), T031b (per-class coverage logging), T031c (per-class coverage summary), T033b (target label leakage), T047b (combined tau grid), T050b (coverage visualization)
+- **Subagent reassignment**: T018-T019 (SATGLoss) moved from Primary/Subagent A to Subagent B (who owns trust_gate.py and completes T017 first)
+- **Config key alignment**: All configs use `lambda_target` (not `target_loss_weight`)

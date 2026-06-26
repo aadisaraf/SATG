@@ -155,6 +155,8 @@ As a researcher, I want to compute and report mIoU and per-class IoU on the City
 
 **Why this priority**: Quantitative evaluation is the primary output of the research. Without standardized metrics, results cannot be compared or published.
 
+**Evaluation Model**: All mIoU is evaluated using the **student model** (not the EMA teacher). The teacher is used only for pseudo-label generation during training. This matches DAFormer/MIC/HRDA convention.
+
 **Independent Test**: Can be verified by running evaluation on a checkpoint and comparing mIoU against known DAFormer/SOTA values.
 
 **Acceptance Scenarios**:
@@ -230,11 +232,11 @@ As a researcher, I want systematic ablation experiments varying the structural p
 
 ### Functional Requirements
 
-- **FR-001**: System MUST compute per-pixel structural complexity heatmaps from RGB images using only classical computer vision operations. The heatmap H is computed as a weighted sum: H = w₁·edge_density + w₂·local_variance, where w₁+w₂=1 (default w₁=w₂=0.5, both configurable). edge_density is the normalized Canny edge map; local_variance is the normalized sliding-window variance. All weights are configurable from YAML. Edge detection uses Canny with Gaussian blur kernel size σ=1.0 (configurable), low threshold=100, high threshold=200 (configurable). Local variance uses a sliding window of 15×15 pixels (configurable). Normalization uses min-max scaling per image: H_norm = (H - H_min) / (H_max - H_min + ε), where ε=1e-6. Weights w₁ and w₂ must satisfy w₁+w₂=1, with w₁∈[0,1], w₂∈[0,1].
+- **FR-001**: System MUST compute per-pixel structural complexity heatmaps from RGB images using only classical computer vision operations. The heatmap H is computed as a weighted sum: H = w₁·edge_density + w₂·local_variance, where w₁+w₂=1 (default w₁=w₂=0.5, both configurable). edge_density is the normalized Canny edge map; local_variance is the normalized sliding-window variance. All weights are configurable from YAML. Edge detection uses Canny with Gaussian blur kernel size σ=2.0 (configurable), low threshold=50, high threshold=150 (configurable). Local variance uses a sliding window of 15×15 pixels (configurable). Normalization uses min-max scaling per image: H_norm = (H - H_min) / (H_max - H_min + ε), where ε=1e-6. Weights w₁ and w₂ must satisfy w₁+w₂=1, with w₁∈[0,1], w₂∈[0,1].
 - **FR-002**: System MUST extract per-pixel softmax confidence and argmax pseudo-labels from teacher logits without gradient computation
 - **FR-003**: System MUST support two trust gating modes: hard rejection (binary mask) and soft weighting (continuous weights). The soft weight is computed as w = σ(β₀ + β₁·c − β₂·s), where σ is the logistic sigmoid, c is teacher confidence, s is structural heatmap value, and β₀, β₁, β₂ are configurable temperature/bias parameters. As β→∞, soft gating approximates hard gating. Default parameters: β₀=0.0, β₁=10.0, β₂=10.0. Ranges: β₀∈[-5,5], β₁∈[1,100], β₂∈[1,100].
 - **FR-004**: Trust gating MUST require BOTH high confidence AND low structural complexity for pixel acceptance (neither alone is sufficient)
-- **FR-005**: System MUST precompute and store heatmaps as .npy files with deterministic naming convention before training. Precomputation script: `tools/compute_structural_heatmaps.py`. Output format: NumPy .npy files. Naming convention: `{image_stem}_satg_heatmap.npy`, stored alongside source images. Heatmap files are saved as float32 NumPy arrays with shape (H, W).
+- **FR-005**: System MUST precompute and store heatmaps as .npy files with deterministic naming convention before training. Precomputation script: `precompute/compute_heatmaps.py`. Output format: NumPy .npy files. Naming convention: `{image_stem}_satg_heatmap.npy`, stored alongside source images. Heatmap files are saved as float32 NumPy arrays with shape (H, W).
 - **FR-006**: System MUST load precomputed heatmaps during training with less than 5ms overhead per image
 - **FR-007**: System MUST apply augmentation transforms consistently to both target images and their corresponding heatmaps. The target augmentation pipeline consists of spatial-only transforms: random resize (0.5–2.0×), random crop to 512×512, random horizontal flip. No color jitter, Gaussian blur, or grayscale is applied to target images. All spatial transforms are applied identically to both image and heatmap.
 - **FR-007a**: Trust gating MUST operate at full image resolution. Teacher logits are bilinearly upsampled to match the precomputed heatmap resolution before the trust gate is applied. This ensures pixel-to-pixel alignment with the final cross-entropy loss computation.
@@ -286,6 +288,10 @@ As a researcher, I want systematic ablation experiments varying the structural p
 - **SC-009**: Hypothesis: SATG improves mIoU by at least 1.0 point over Standard Mean Teacher on GTA5→Cityscapes, with the largest gains (>2.0 mIoU) on structurally complex classes (pole, fence, traffic sign, rider)
 - **SC-010**: Expected improvement: 1–3 mIoU overall, with >2 mIoU on complex classes. Improvements <0.5 mIoU are considered marginal (per Constitution §1.8)
 - **SC-011**: Falsification criterion: If SATG does not improve mIoU over Standard Mean Teacher across 3 seeds, or if improvements are <0.5 mIoU, the hypothesis is falsified
+
+## Evaluation Model
+
+Final mIoU is evaluated using the **student model** (not the EMA teacher). The teacher is used only for pseudo-label generation during training. All reported results use student model inference on the Cityscapes validation split. This matches the convention in DAFormer, MIC, and HRDA.
 
 ## Assumptions
 

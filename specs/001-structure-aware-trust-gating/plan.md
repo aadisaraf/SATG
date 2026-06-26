@@ -40,6 +40,8 @@ SATG is a UDA semantic segmentation method that augments standard teacher-studen
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
+**Evaluation Model**: Final mIoU is evaluated using the **student model** (not the EMA teacher). The teacher is used only for pseudo-label generation during training. All reported results use student model inference on the Cityscapes validation split.
+
 | Principle | Status | Notes |
 |-----------|--------|-------|
 | §1.1 Seed Management | ✅ PASS | Fixed seeds {42, 1337, 2024} configurable via YAML |
@@ -128,7 +130,14 @@ satg-project/
 │   ├── test_trust_gate.py
 │   ├── test_losses.py
 │   ├── test_ema.py
-│   └── test_data_loaders.py
+│   ├── test_segmentation.py
+│   ├── test_data_loaders.py
+│   ├── test_precompute.py
+│   ├── test_trainer.py
+│   ├── test_evaluator.py
+│   ├── test_visualization.py
+│   ├── test_data_leakage.py
+│   └── test_configs.py
 ├── EXPERIMENTS.md                 # All results + configs
 ├── README.md                      # Installation + usage
 ├── requirements.txt               # Pinned dependencies
