@@ -63,7 +63,7 @@ SATG is a UDA semantic segmentation method that augments standard teacher-studen
 | §2.7 Linting/Formatting | ✅ PASS | black + flake8 enforced |
 | §2.8 Swappable Backbones | ✅ PASS | Backbone configurable via YAML |
 | §2.9 Heatmap Naming | ✅ PASS | `{stem}_satg_heatmap.npy` convention |
-| §3.1 Mandatory Ablations | ✅ PASS | 7 ablation variants enumerated |
+| §3.1 Mandatory Ablations | ✅ PASS | 9 ablation variants enumerated (A–G + grid + k-sensitivity) |
 | §3.2 Source Only Baseline | ✅ PASS | Lower bound always included |
 | §3.3 Dry Run Validation | ✅ PASS | 10 images, 10 iters before full runs |
 | §4.1 README Completeness | ✅ PASS | Install + usage + CLI syntax |
@@ -97,7 +97,8 @@ satg-project/
 ├── configs/
 │   ├── default.yaml               # Master config with all defaults
 │   ├── satg_hard.yaml             # SATG hard rejection (extends default)
-│   ├── satg_soft.yaml             # SATG soft weighting (extends default)
+│   ├── satg_soft_weight.yaml       # SATG soft-weight variant (extends default)
+│   ├── satg_soft_label.yaml       # SATG soft-label variant (extends default)
 │   ├── baseline_mean_teacher.yaml # Conf-threshold only (extends default)
 │   └── source_only.yaml           # No target pseudo-labeling
 ├── data/
@@ -113,7 +114,8 @@ satg-project/
 │   ├── __init__.py
 │   ├── structural_prior.py        # StructuralPrior class
 │   ├── trust_gate.py              # HardTrustGate + SoftTrustGate classes
-│   └── losses.py                  # SATGLoss class
+│   ├── soft_label.py              # TemperatureSoftLabel class
+│   └── losses.py                  # SATGLoss + SoftLabelKLLoss classes
 ├── precompute/
 │   └── compute_heatmaps.py        # CLI script: offline heatmap precomputation
 ├── training/
@@ -128,6 +130,7 @@ satg-project/
 │   ├── conftest.py                # Shared fixtures
 │   ├── test_structural_prior.py
 │   ├── test_trust_gate.py
+│   ├── test_soft_label.py
 │   ├── test_losses.py
 │   ├── test_ema.py
 │   ├── test_segmentation.py
@@ -150,3 +153,61 @@ satg-project/
 ## Complexity Tracking
 
 > No constitution violations — no complexity tracking needed.
+
+## Module Specifications
+
+### satg/soft_label.py: TemperatureSoftLabel class
+
+- `__init__(cfg: OmegaConf)`: reads `k` (default 4.0), `T_max` (default 5.0), `tau_conf` (shared with hard gate, for the pre-filter)
+- `compute_temperature(struct: Tensor[B,H,W]) -> Tensor[B,H,W]`: T = 1.0 + k * struct, then clamp to [1.0, T_max]
+- `compute_soft_targets(teacher_logits: Tensor[B,C,H,W], struct: Tensor[B,H,W]) -> Tensor[B,C,H,W]`:
+  1. Compute per-pixel temperature T [B,H,W]
+  2. Expand T to [B,1,H,W] and divide teacher_logits by T (broadcast across class dim)
+  3. Apply softmax over class dim → soft_targets [B,C,H,W]
+  4. Return soft_targets (each pixel's C-vector sums to 1.0)
+- `compute_confidence_mask(teacher_logits: Tensor[B,C,H,W], tau_conf: float) -> Tensor[B,H,W]`: reuse the SAME confidence computation as the existing hard trust gate (max softmax prob > tau_conf), used as a binary pre-filter before the distributional loss is applied
+
+### satg/losses.py: SoftLabelKLLoss class (nn.Module), alongside existing SATGLoss
+
+- `__init__(ignore_index=255)`
+- `forward(student_logits: Tensor[B,C,H,W], soft_targets: Tensor[B,C,H,W], confidence_mask: Tensor[B,H,W]) -> Tensor (scalar)`
+- Computation:
+  1. `student_log_probs = log_softmax(student_logits, dim=1)` → [B,C,H,W]
+  2. `per_pixel_kl = sum(soft_targets * (log(soft_targets + eps) - student_log_probs), dim=1)` → [B,H,W]
+  3. `masked_kl = per_pixel_kl * confidence_mask` → [B,H,W]
+  4. If `confidence_mask.sum() == 0`: return `torch.tensor(0.0)`
+  5. Else: return `masked_kl.sum() / confidence_mask.sum()`
+- Safety: eps=1e-8 added inside log to avoid log(0); no NaN/Inf under any input including confidence_mask=all-zero
+
+## Config Schema
+
+```yaml
+trust_gate:
+  type: hard               # "hard" | "soft_weight" | "soft_label"
+  tau_conf: 0.90
+  tau_struct: 0.60          # used by "hard" and as structural input to others
+  soft_weight_temp_conf: 0.1     # used by soft_weight
+  soft_weight_temp_struct: 0.1   # used by soft_weight
+  soft_label_k: 4.0               # temperature scaling constant
+  soft_label_t_max: 5.0           # temperature cap
+```
+
+## Training Flow
+
+```python
+if cfg.trust_gate.type == "hard":
+    trust_weights = hard_gate.compute_mask(confidence, tgt_heatmaps)
+    target_loss = satg_loss(tgt_student_logits, pseudo_labels, trust_weights)
+
+elif cfg.trust_gate.type == "soft_weight":
+    trust_weights = soft_weight_gate.compute_weights(confidence, tgt_heatmaps)
+    target_loss = satg_loss(tgt_student_logits, pseudo_labels, trust_weights)
+
+elif cfg.trust_gate.type == "soft_label":
+    soft_targets = soft_label_module.compute_soft_targets(
+                       tgt_teacher_logits, tgt_heatmaps)
+    confidence_mask = soft_label_module.compute_confidence_mask(
+                       tgt_teacher_logits, cfg.trust_gate.tau_conf)
+    target_loss = soft_label_kl_loss(tgt_student_logits, soft_targets,
+                                      confidence_mask)
+```

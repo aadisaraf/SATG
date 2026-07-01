@@ -92,7 +92,7 @@ As a researcher, I want to generate a binary trust mask that accepts only pseudo
 
 ---
 
-### User Story 4 - Trust Gating: Soft Weighting (Priority: P4)
+### User Story 4 - Trust Gating: Soft-Weight Variant (Priority: P4)
 
 As a researcher, I want an alternative to hard rejection where pseudo-labels receive continuous trust weights rather than binary accept/reject decisions, so that the student's supervision signal degrades smoothly with structural complexity rather than cutting off abruptly.
 
@@ -108,6 +108,28 @@ As a researcher, I want an alternative to hard rejection where pseudo-labels rec
 4. **Given** confidence approaching 1.0 AND structure approaching 0.0, **When** w is computed, **Then** w approaches 1.0
 5. **Given** confidence approaching 0.0 OR structure approaching 1.0, **When** w is computed, **Then** w approaches 0.0
 6. **Given** very steep temperature parameters, **When** soft weighting is computed, **Then** it approximates hard rejection behavior
+
+---
+
+### User Story 4b - Trust Gating: Soft-Label Variant — Temperature-Scaled Pseudo-Labels (Priority: P4b)
+
+As a researcher, I want an alternative trust mechanism that softens the teacher's predicted class distribution itself — not just the loss weight — so that the student is trained on "this is probably class X, but I'm not certain" rather than a hard one-hot label scaled down in importance. This tests whether softening the supervision target (distributional uncertainty) is more effective than softening the supervision weight (US-04's mechanism).
+
+**Why this priority**: This variant isolates a fundamentally different axis of softening — target distribution vs. loss weight — enabling a direct comparison of which mechanism is more effective for pseudo-label denoising.
+
+**Independent Test**: Can be tested by verifying that soft targets are valid probability distributions summing to 1.0 per pixel, temperature scaling is monotonic with structural complexity, and KL divergence/soft cross-entropy loss computes correctly.
+
+**Acceptance Scenarios**:
+
+1. **Given** teacher logits [B,C,H,W] and structural heatmap [B,H,W], **When** soft-label computation runs, **Then** output is a soft target distribution [B,C,H,W] where each pixel's C-length vector sums to 1.0 (still a valid probability distribution)
+2. **Given** the softening temperature T, **When** it is computed per-pixel as a function of structural complexity, **Then** T[b,h,w] = 1.0 + k * structural_heatmap[b,h,w], where k is a configurable scaling constant (default k=4.0)
+3. **Given** structural_heatmap=0 (structurally simple regions), **When** temperature is computed, **Then** T=1.0 (no softening); the teacher's original confident distribution is preserved
+4. **Given** structural_heatmap>0, **When** temperature is computed, **Then** T>1.0 (softened, flatter distribution); softening increases monotonically with structural complexity
+5. **Given** teacher logits and per-pixel T values, **When** soft target is computed, **Then** it is softmax(teacher_logits / T), applied per-pixel with per-pixel T values (NOT a single scalar T for the whole image)
+6. **Given** the soft target and student predictions, **When** target loss is computed, **Then** it uses a distributional loss (KL divergence or soft cross-entropy) between the student's predicted distribution and the soft target distribution — NOT a hard-label cross-entropy
+7. **Given** confidence gating as a pre-filter, **When** pixels have teacher confidence < tau_conf, **Then** they contribute zero loss regardless of temperature (preserves the "teacher must be at least somewhat confident" requirement from the original trust gating philosophy)
+8. **Given** tau_conf gating excludes all pixels in a batch, **When** loss is computed, **Then** loss=0.0 with no NaN/Inf (same safety contract as existing SATGLoss)
+9. **Given** documentation, configs, and code, **When** this variant is referenced, **Then** it must be clearly distinguished from US-04 (SATG Soft-Weight), which instead scales the loss magnitude while keeping the target a hard one-hot label
 
 ---
 
@@ -202,6 +224,8 @@ As a researcher, I want systematic ablation experiments varying the structural p
 5. **Given** ablation E, **When** it runs, **Then** it varies edge detection kernel σ ∈ {0.5, 1.0, 2.0} and local variance window ∈ {7×7, 15×15, 31×31}
 6. **Given** ablation results, **When** EXPERIMENTS.md is updated, **Then** all ablation results are included—no runs hidden or omitted
 7. **Given** ablation results, **When** per-class IoU is reported, **Then** it is shown for at least the 5 most affected classes
+8. **Given** ablation F — Soft mechanism comparison, **When** it runs, **Then** it compares SATG Soft-Weight vs. SATG Soft-Label, both compared against SATG Hard and Mean Teacher, single seed=42 each, to determine whether weight-scaling or distribution-softening is the more effective soft mechanism
+9. **Given** ablation G — Temperature scaling constant, **When** it runs, **Then** it sweeps k ∈ {2.0, 4.0, 6.0} for SATG Soft-Label, single seed=42 each
 
 ---
 
@@ -224,6 +248,7 @@ As a researcher, I want systematic ablation experiments varying the structural p
 - RISK-02 (coarse prior): Mitigate via kernel size ablation (Ablation E).
 - RISK-03 (hyperparameter sensitivity): Mitigate via grid search over tau_conf and tau_struct (Ablations B and C).
 - RISK-04 (augmentation mismatch): Mitigate via DataLoader contract requiring identical augmentation for image and heatmap.
+- RISK-05 (temperature over-softening): Temperature softening may be too aggressive at high structural complexity, causing the soft target to approach a near-uniform distribution and providing near-zero useful gradient signal. Mitigation: Cap maximum temperature (e.g., T_max=5.0) via config; ablate k sensitivity similarly to tau_conf/tau_struct.
 - Validation step: After augmentation, verify heatmap-image alignment by checking that heatmap dimensions match image dimensions and that spatial transforms are consistent.
 - Analyze trust mask coverage per class to detect class imbalance in trusted pixels. Log per-class coverage ratios during training.
 - If GPU memory is limited, reduce crop size (e.g., 384×384) or use gradient accumulation, but never skip required ablations or the Source Only baseline (per Constitution §6).
@@ -234,7 +259,7 @@ As a researcher, I want systematic ablation experiments varying the structural p
 
 - **FR-001**: System MUST compute per-pixel structural complexity heatmaps from RGB images using only classical computer vision operations. The heatmap H is computed as a weighted sum: H = w₁·edge_density + w₂·local_variance, where w₁+w₂=1 (default w₁=w₂=0.5, both configurable). edge_density is the normalized Canny edge map; local_variance is the normalized sliding-window variance. All weights are configurable from YAML. Edge detection uses Canny with Gaussian blur kernel size σ=2.0 (configurable), low threshold=50, high threshold=150 (configurable). Local variance uses a sliding window of 15×15 pixels (configurable). Normalization uses min-max scaling per image: H_norm = (H - H_min) / (H_max - H_min + ε), where ε=1e-6. Weights w₁ and w₂ must satisfy w₁+w₂=1, with w₁∈[0,1], w₂∈[0,1].
 - **FR-002**: System MUST extract per-pixel softmax confidence and argmax pseudo-labels from teacher logits without gradient computation
-- **FR-003**: System MUST support two trust gating modes: hard rejection (binary mask) and soft weighting (continuous weights). The soft weight is computed as w = σ(β₀ + β₁·c − β₂·s), where σ is the logistic sigmoid, c is teacher confidence, s is structural heatmap value, and β₀, β₁, β₂ are configurable temperature/bias parameters. As β→∞, soft gating approximates hard gating. Default parameters: β₀=0.0, β₁=10.0, β₂=10.0. Ranges: β₀∈[-5,5], β₁∈[1,100], β₂∈[1,100].
+- **FR-003**: System MUST support three trust gating modes: hard rejection (binary mask), soft weighting (continuous weights), and soft-label (temperature-scaled distributional targets). The soft weight is computed as w = σ(β₀ + β₁·c − β₂·s), where σ is the logistic sigmoid, c is teacher confidence, s is structural heatmap value, and β₀, β₁, β₂ are configurable temperature/bias parameters. As β→∞, soft gating approximates hard gating. Default parameters: β₀=0.0, β₁=10.0, β₂=10.0. Ranges: β₀∈[-5,5], β₁∈[1,100], β₂∈[1,100]. The soft-label mode uses per-pixel temperature scaling T=1+k·s with configurable k (default 4.0) and T_max (default 5.0), producing soft target distributions via softmax(teacher_logits/T) trained with KL divergence loss.
 - **FR-004**: Trust gating MUST require BOTH high confidence AND low structural complexity for pixel acceptance (neither alone is sufficient)
 - **FR-005**: System MUST precompute and store heatmaps as .npy files with deterministic naming convention before training. Precomputation script: `precompute/compute_heatmaps.py`. Output format: NumPy .npy files. Naming convention: `{image_stem}_satg_heatmap.npy`, stored alongside source images. Heatmap files are saved as float32 NumPy arrays with shape (H, W).
 - **FR-006**: System MUST load precomputed heatmaps during training with less than 5ms overhead per image
@@ -249,7 +274,7 @@ As a researcher, I want systematic ablation experiments varying the structural p
 - **FR-013**: System MUST save best checkpoint automatically based on validation mIoU
 - **FR-014**: System MUST compute and report mIoU and per-class IoU for all 19 standard Cityscapes classes
 - **FR-015**: System MUST exclude pixels with label=255 from IoU computation
-- **FR-016**: System MUST support training with three configurations: Source Only, Standard Mean Teacher, and SATG
+- **FR-016**: System MUST support training with four configurations: Source Only, Standard Mean Teacher, SATG Hard/Soft-Weight, and SATG Soft-Label
 - **FR-017**: System MUST average all reported mIoU values over 3 seeds (42, 1337, 2024)
 - **FR-018**: System MUST generate 1×5 panel visualizations for at least 10 diverse images per configuration
 - **FR-019**: System MUST perform ablation studies on prior type, trust function, tau_conf, and tau_struct
@@ -313,7 +338,7 @@ Final mIoU is evaluated using the **student model** (not the EMA teacher). The t
 ### Session 2026-06-24
 
 - Q: What is the exact formula for combining edge density and local variance into the single structural heatmap? → A: Weighted sum: H = w₁·edge_density + w₂·local_variance, w₁+w₂=1, default w₁=w₂=0.5, configurable from YAML.
-- Q: What is the trust weight function for the soft variant? → A: Sigmoid: w = σ(β₀ + β₁·c − β₂·s), where σ is the logistic function, c is teacher confidence, s is structural heatmap value, β₀/β₁/β₂ configurable. As β→∞, approximates hard gating.
+- Q: What is the trust weight function for the soft-weight variant? → A: Sigmoid: w = σ(β₀ + β₁·c − β₂·s), where σ is the logistic function, c is teacher confidence, s is structural heatmap value, β₀/β₁/β₂ configurable. As β→∞, approximates hard gating.
 - Q: EMA momentum — constant vs. scheduled? → A: Scheduled ramp: α_t = min(1 − 1/(iter+1), α_target), default α_target=0.999. Matches DAFormer/MIC/HRDA convention.
 - Q: How to handle spatial resolution mismatch between heatmap and teacher output? → A: Full resolution. Upsample teacher logits to match heatmap resolution before gating. Gating operates at the same resolution as the final cross-entropy loss.
 - Q: Warmup period before SATG kicks in? → A: No delay. Pseudo-labeling starts from iteration 1. The scheduled EMA ramp handles early instability. Matches DAFormer/MIC/HRDA convention.
