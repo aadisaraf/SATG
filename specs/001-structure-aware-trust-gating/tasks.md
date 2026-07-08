@@ -3,6 +3,14 @@
 **Input**: Design documents from `/specs/001-structure-aware-trust-gating/`
 **Spec**: spec.md | **Plan**: plan.md | **Contracts**: contracts/module-api.md
 
+## Priority Restructuring
+
+**Soft-labeling/soft-weighting is the PRIMARY contribution.** Hard rejection is a baseline mechanism. The user stories are reordered to reflect this:
+
+- US-04b (Soft-Label): **P3** — Primary contribution
+- US-04 (Soft-Weight): **P4** — Secondary soft mechanism
+- US-03 (Hard Rejection): **P5** — Baseline mechanism
+
 ## Multi-Subagent Coordination
 
 After Phase 0 is complete, tasks are distributed as follows:
@@ -13,10 +21,10 @@ After Phase 0 is complete, tasks are distributed as follows:
 | **Subagent A** | PHASE 2 (structural_prior.py + tests) | T012–T014 |
 | **Subagent B** | PHASE 2 (trust_gate.py + tests) + PHASE 2 (losses.py) | T015–T019 |
 | **Subagent C** | PHASE 3 (segmentation.py + ema.py + tests) | T020–T023 |
-| **Subagent D** | PHASE 2 (soft_label.py + SoftLabelKLLoss + tests) | T019a–T019d |
+| **Subagent D** | PHASE 2 (soft_label.py + SoftLabelKLLoss + tests) **PRIMARY** | T019a–T019d |
 | **Primary** | PHASE 4 (precompute script) | T024–T027 |
 
-Subagents A, B, C run in parallel after Phase 0 completes. Primary handles PHASE 1, 4, 5–10 sequentially.
+Subagents A, B, C, D run in parallel after Phase 0 completes. **Subagent D is the primary contribution** (soft-label modulation). Primary handles PHASE 1, 4, 5–10 sequentially.
 
 ---
 
@@ -66,7 +74,31 @@ Subagents A, B, C run in parallel after Phase 0 completes. Primary handles PHASE
 
 ## PHASE 2: Core SATG Modules (structural prior, trust gate, loss) [PARALLEL OK]
 
-> Subagents A, B work in parallel on PHASE 2 tasks.
+> Subagents A, B, D work in parallel on PHASE 2. **Subagent D (soft_label) is the primary contribution.**
+
+- [ ] T019a [P] — [US4b/PRIMARY] Write tests for TemperatureSoftLabel in `tests/test_soft_label.py`. Tests to include:
+  - test_temperature_at_zero_struct_is_one: struct=0 -> T=1.0 exactly
+  - test_temperature_increases_with_struct: struct=0.2 -> T=1.8, struct=0.5 -> T=3.0 (using k=4.0 default)
+  - test_temperature_capped_at_t_max: struct=1.0, k=10 -> T clamped to T_max
+  - test_soft_target_sums_to_one: output[b,:,h,w].sum() ≈ 1.0 for all pixels
+  - test_soft_target_flattens_with_temperature: as struct increases for a fixed teacher_logits input, the resulting distribution's entropy strictly increases (confirms softening actually happens)
+  - test_high_temp_approaches_uniform: at T=T_max with large struct, the output distribution is close to uniform (1/C for each class)
+  - test_confidence_mask_matches_hard_gate_logic: confidence_mask uses the same tau_conf comparison as the existing hard gate
+  Parallel: [P] — independent of other Phase 2 tasks
+  Dependencies: NONE (uses synthetic fixtures from conftest.py)
+  Files: tests/test_soft_label.py. Estimated time: 30–40 min. Acceptance Criterion: Tests exist and FAIL (red phase — TemperatureSoftLabel not implemented). Subagent hint: Subagent D (primary).
+
+- [ ] T019b — [US4b/PRIMARY] Implement `satg/soft_label.py` TemperatureSoftLabel class: `__init__(cfg)` reads k, T_max, tau_conf; `compute_temperature(struct)` computes T=1.0+k*struct clamped to [1.0,T_max]; `compute_soft_targets(teacher_logits, struct)` divides logits by per-pixel T then softmax; `compute_confidence_mask(teacher_logits, tau_conf)` reuses hard gate logic. Files: `satg/soft_label.py`. Estimated time: 30–40 min. Acceptance Criterion: All tests in T019a pass (green phase). Subagent hint: Subagent D (after T019a).
+
+- [ ] T019c [P] — [US4b/PRIMARY] Write tests for SoftLabelKLLoss in `tests/test_losses.py` (extend existing file). Tests to include:
+  - test_zero_confidence_mask_gives_zero_loss
+  - test_no_nan_with_zero_mask
+  - test_identical_distributions_give_near_zero_kl: if student_logits produce the exact same distribution as soft_targets, KL ≈ 0
+  - test_loss_increases_with_distribution_mismatch
+  - test_output_is_scalar
+  Dependencies: NONE. Files: tests/test_losses.py. Estimated time: 20–30 min. Acceptance Criterion: Tests exist and FAIL (red phase — SoftLabelKLLoss not implemented). Subagent hint: Subagent D (new).
+
+- [ ] T019d — [US4b/PRIMARY] Implement `satg/losses.py` SoftLabelKLLoss class (nn.Module): `__init__(ignore_index=255)`; `forward(student_logits, soft_targets, confidence_mask)` computes KL divergence masked by confidence, returns 0.0 when mask is all-zero, eps=1e-8 for log safety. Files: `satg/losses.py` (extend existing). Estimated time: 20–30 min. Acceptance Criterion: All new SoftLabelKLLoss tests pass; existing SATGLoss tests still pass. Subagent hint: Subagent D (after T019c).
 
 - [ ] T012 [P] — [US1] Write tests for StructuralPrior in `tests/test_structural_prior.py`: test output shape matches input, test output values in [0,1], test sky region mean < 0.30, test vegetation mean > 0.60, test deterministic (same input → same output), test only classical CV ops used. Files: `tests/test_structural_prior.py`. Estimated time: 30–40 min. Acceptance Criterion: Tests exist and FAIL (red phase — StructuralPrior not implemented). Subagent hint: Subagent A.
 
@@ -164,6 +196,8 @@ Subagents A, B, C run in parallel after Phase 0 completes. Primary handles PHASE
 
 - [ ] T033c — [US4b] Add soft_label branch to `training/trainer.py`: implement the three-way branch (hard / soft_weight / soft_label) per plan.md TRAINING FLOW. When `cfg.trust_gate.type == "soft_label"`, compute soft_targets via TemperatureSoftLabel, compute confidence_mask, and pass both to SoftLabelKLLoss instead of SATGLoss. Ensure trust_coverage_ratio logging still works for soft_label (define it as confidence_mask.mean() for this variant). Files: `training/trainer.py` (extend existing). Estimated time: 30–40 min. Acceptance Criterion: Trainer runs correctly with `trust_gate.type=soft_label`; trust_coverage_ratio is logged as confidence_mask.mean(); no regression on hard/soft_weight modes. Subagent hint: Primary.
 
+- [ ] T033d — [HYPOTHESIS] Add hypothesis validation logging to `training/trainer.py`: during training, log per-batch metrics for hypothesis validation: (1) correlation between structural heatmap values and pseudo-label prediction disagreement (proxy for error since target GT is unavailable), (2) per-class trust coverage ratios for all 19 classes, (3) distribution statistics of structural complexity for trusted vs. rejected pixels. Log all metrics to WandB. Files: `training/trainer.py` (extend existing). Estimated time: 30–40 min. Acceptance Criterion: All hypothesis validation metrics are logged to WandB; correlation metric is finite; per-class coverage ratios sum to overall trust_coverage_ratio. Subagent hint: Primary.
+
 **Checkpoint**: Phase 5 complete — training loop integrated and tested.
 
 ---
@@ -175,6 +209,8 @@ Subagents A, B, C run in parallel after Phase 0 completes. Primary handles PHASE
 - [ ] T000 — — Dry Run Verification: Run training for 10 iterations on 10 images with `training.iterations=10 training.batch_size=1 training.eval_interval=5`. Verify: (1) no NaN/Inf in any logged loss, (2) EMA weights update (teacher ≠ student after step 1), (3) checkpoint file saved, (4) WandB logs received, (5) all 10 iterations complete without error. Files: (no new files, validation only). Estimated time: 20–30 min. Acceptance Criterion: All 5 criteria met; `python -m training.trainer training.iterations=10 training.eval_interval=5` exits cleanly. Subagent hint: Primary.
 
 - [ ] T000b — — Mini Dry Run — SATG Soft-Label: Before full training, run 10 iterations with `configs/satg_soft_label.yaml` on the same 10-image subset used in T000. Verify: no NaN/Inf, soft_targets sum to 1.0 per pixel, confidence_mask is in {0,1}, KL loss is non-negative, checkpoint saves correctly. Files: (no new files, validation only). Estimated time: 15–20 min. Acceptance Criterion: All checks pass; `python -m training.trainer --config configs/satg_soft_label.yaml training.iterations=10 training.eval_interval=5` exits cleanly. Must PASS before the 3-seed SATG Soft-Label training task begins. Subagent hint: Primary.
+
+- [ ] T000c — — **Hypothesis Validation Dry Run**: Run training for 100 iterations with `configs/satg_soft_label.yaml`. Log and verify: (1) structural heatmap values are in [0,1], (2) teacher confidence values are in (0,1), (3) pseudo-label error rate is computable, (4) correlation between structural heatmap and prediction disagreement is logged, (5) per-class trust coverage ratios are logged. Files: (no new files, validation only). Estimated time: 20–30 min. Acceptance Criterion: All 5 metrics are logged to WandB; correlation metric is finite and not NaN. This validates that hypothesis tracking infrastructure works before full training. Subagent hint: Primary.
 
 ---
 
@@ -248,11 +284,21 @@ Subagents A, B, C run in parallel after Phase 0 completes. Primary handles PHASE
 
 - [ ] T048 — — Ablation E: Kernel σ ∈ {0.5, 1.0, 2.0} and variance window ∈ {7×7, 15×15, 31×31} (6 configs, seed=42 each). Files: `configs/ablation_kernel_*.yaml`, EXPERIMENTS.md. Estimated time: 180–240 min. Acceptance Criterion: All 6 kernel ablation results in EXPERIMENTS.md; results show kernel size affects mIoU, confirming RISK-02 (coarse prior) is a real factor; optimal kernel configuration identified and reported. Subagent hint: Primary.
 
-- [ ] T048b — — Train SATG Soft-Label (3 seeds): run `python -m training.trainer --config configs/satg_soft_label.yaml` with seed=42, 1337, 2024. Record mean±std mIoU and per-class IoU in EXPERIMENTS.md. Dependencies: T033c (soft_label trainer branch) complete, T000b (soft-label dry run) passed. Files: EXPERIMENTS.md (append). Estimated time: 180–360 min (3 × 40k iterations). Acceptance Criterion: 3-seed mean±std mIoU reported for SATG Soft-Label; per-class IoU for all 19 classes in EXPERIMENTS.md. Subagent hint: Primary.
+- [ ] T048b — — Train SATG Soft-Label (**5 seeds**: {42, 1337, 2024, 7, 99}): run `python -m training.trainer --config configs/satg_soft_label.yaml`. Record mean±std mIoU and per-class IoU in EXPERIMENTS.md. Dependencies: T033c (soft_label trainer branch) complete, T000b (soft-label dry run) passed. Files: EXPERIMENTS.md (append). Estimated time: 300–600 min (5 × 40k iterations). Acceptance Criterion: 5-seed mean±std mIoU reported for SATG Soft-Label; per-class IoU for all 19 classes in EXPERIMENTS.md. Subagent hint: Primary.
 
 - [ ] T048c — — Ablation F — Soft mechanism comparison: compile a side-by-side comparison table of SATG Hard, SATG Soft-Weight, SATG Soft-Label, all using their already-completed main run results. Include mIoU (mean±std) and per-class IoU for the top-5 most affected classes. Files: EXPERIMENTS.md (append comparison table). Estimated time: 15–20 min. Acceptance Criterion: Comparison table in EXPERIMENTS.md with all three variants; determines whether weight-scaling or distribution-softening is the more effective soft mechanism. Dependencies: SATG Hard (T043+T045), SATG Soft-Weight (T044+T045), and SATG Soft-Label (T048b) main runs all complete. Subagent hint: Primary.
 
 - [ ] T048d — — Ablation G — Temperature constant k sensitivity: run `configs/satg_soft_label.yaml` with k ∈ {2.0, 6.0} (k=4.0 already run as the main soft-label run in T048b), single seed=42 each. Create ablation config files with overrides. Record in EXPERIMENTS.md under "Ablation G: soft_label_k". Files: `configs/ablation_soft_label_k2.yaml`, `configs/ablation_soft_label_k6.yaml`, EXPERIMENTS.md. Estimated time: 120–180 min (2 × 40k iterations). Acceptance Criterion: Both k-sensitivity results in EXPERIMENTS.md; sensitivity to k characterized. Dependencies: SATG Soft-Label main run (T048b) complete for the k=4.0 baseline. Subagent hint: Primary.
+
+### Combination Experiments (Phase 9 Extension)
+
+- [ ] T048e — — Implement Rare Class Sampling as config option in `data/gta5_loader.py` or `data/rare_class_sampler.py`: inverse frequency weighting for source batches, configurable via YAML `data.rare_class_sampling=true`. Files: `data/rare_class_sampler.py` or `data/gta5_loader.py`. Estimated time: 30–40 min. Acceptance Criterion: Sampler works correctly; source batch class distribution is more uniform; sampler is config-driven. Subagent hint: Primary.
+
+- [ ] T048f — — Train DAFormer baseline: `python -m training.trainer --config configs/baseline_daformer.yaml` with Rare Class Sampling enabled, seed=42. Record mIoU and per-class IoU. Files: `configs/baseline_daformer.yaml`, EXPERIMENTS.md (append). Estimated time: 60–120 min. Acceptance Criterion: mIoU ~56% on Cityscapes val; results in EXPERIMENTS.md. Subagent hint: Primary.
+
+- [ ] T048g — — Train SATG Soft-Label + DAFormer: `python -m training.trainer --config configs/satg_soft_label_daformer.yaml` with both Rare Class Sampling and soft-label modulation, seeds {42, 1337}. Record mIoU and per-class IoU. Files: `configs/satg_soft_label_daformer.yaml`, EXPERIMENTS.md (append). Estimated time: 120–240 min. Acceptance Criterion: mIoU > DAFormer alone; results in EXPERIMENTS.md; complementarity demonstrated. Subagent hint: Primary.
+
+- [ ] T048h — — Compile combination experiment comparison table: DAFormer alone vs. SATG Soft-Label + DAFormer. Include mIoU (mean±std) and per-class IoU for all 19 classes. Files: EXPERIMENTS.md (append). Estimated time: 15–20 min. Acceptance Criterion: Comparison table in EXPERIMENTS.md; complementarity quantified. Dependencies: T048f and T048g complete. Subagent hint: Primary.
 
 **Checkpoint**: Phase 9 complete — all main experiments and ablations finished.
 
@@ -323,13 +369,17 @@ Within PHASE 3: T020 || T022 (different files, no deps)
 - [P] tasks run in parallel (different files, no dependencies on incomplete tasks)
 - All test tasks follow test-first (red → green) per constitution §2.2
 - Constitution §1.2 requires 3 seeds {42, 1337, 2024} for all reported mIoU
+- **Exception**: SATG Soft-Label (T048b) uses 5 seeds {42, 1337, 2024, 7, 99} for better statistical power on the primary contribution
 - Constitution §3.1 requires all 7 ablation variants
 - Constitution §3.2 requires Source Only baseline
 - Constitution §3.3 requires dry run (T000) before any full training
 - PHASE 7.5 generates all cloud scripts — after this, PHASE 8–9 are user-executed on cloud
 - Compute-bound tasks (PHASE 8–9) have wide time estimates; actual time depends on GPU
-- Cloud cost estimate: ~$300–500 for full PHASE 8+9 on A100 instances
+- Cloud cost estimate: ~$400-600 for full PHASE 8+9 on A100 instances (increased due to combination experiments and 5-seed soft-label run)
 - **Evaluation model**: Final mIoU uses student model (not EMA teacher), per spec.md and plan.md
-- **New tasks added**: T002b (coverage enforcement), T005b (config isolation), T005c (soft_label config), T009b (Rare Class Sampling), T010b (augmentation consistency), T019a–T019d (soft_label module + KL loss), T031b (per-class coverage logging), T031c (per-class coverage summary), T033b (target label leakage), T033c (soft_label trainer branch), T000b (soft-label dry run), T047b (combined tau grid), T048b (soft-label 3-seed training), T048c (soft mechanism comparison), T048d (k sensitivity ablation), T050b (coverage visualization)
+- **New tasks added**: T002b (coverage enforcement), T005b (config isolation), T005c (soft_label config), T009b (Rare Class Sampling), T010b (augmentation consistency), T019a–T019d (soft_label module + KL loss), T031b (per-class coverage logging), T031c (per-class coverage summary), T033b (target label leakage), T033c (soft_label trainer branch), T033d (hypothesis validation logging), T000b (soft-label dry run), T000c (hypothesis validation dry run), T047b (combined tau grid), T048b (soft-label 5-seed training), T048c (soft mechanism comparison), T048d (k sensitivity ablation), T048e (Rare Class Sampling implementation), T048f (DAFormer baseline), T048g (SATG Soft-Label + DAFormer), T048h (combination comparison table), T050b (coverage visualization)
 - **Subagent reassignment**: T018-T019 (SATGLoss) moved from Primary/Subagent A to Subagent B (who owns trust_gate.py and completes T017 first)
 - **Config key alignment**: All configs use `lambda_target` (not `target_loss_weight`)
+- **Priority restructuring**: Soft-labeling/soft-weighting is the PRIMARY contribution; hard rejection is a baseline mechanism
+- **Combination experiments**: T048e–T048h test SATG+DAFormer complementarity (untested claim in original spec)
+- **Hypothesis validation**: T033d and T000c add infrastructure to validate the core assumption (structural complexity correlates with pseudo-label error)
