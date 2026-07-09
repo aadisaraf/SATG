@@ -1,0 +1,10 @@
+# Standard Mean Teacher baseline
+# Confidence-threshold-only — no structural prior.
+# tau_struct=1.01 ensures structure filter never rejects (H in [0,1] < 1.01).
+# skip_heatmap=true avoids loading .npy files (unused in this baseline).
+trust_gate:
+  type: hard
+  tau_conf: 0.90
+  tau_struct: 1.01
+training:
+  skip_heatmap: true

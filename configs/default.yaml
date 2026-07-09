@@ -1,0 +1,90 @@
+# =============================================================================
+# Master Configuration — Structure-Aware Trust Gating (SATG)
+# EXACT schema — canonical source of truth for all config key names.
+# =============================================================================
+
+# --------------------------------
+# Reproducibility
+# --------------------------------
+seed: 42
+
+# --------------------------------
+# Model
+# --------------------------------
+model:
+  backbone: resnet50
+  pretrained: true
+  num_classes: 19
+  backbone_lr_multiplier: 0.1
+
+# --------------------------------
+# EMA Teacher
+# --------------------------------
+ema:
+  momentum: 0.999
+  warmup_iterations: 0
+
+# --------------------------------
+# Structural Prior
+# --------------------------------
+structural_prior:
+  edge_low_threshold: 50
+  edge_high_threshold: 150
+  gaussian_sigma: 2.0
+  edge_kernel_size: 15
+  variance_kernel_size: 15
+  edge_weight: 0.5
+  variance_weight: 0.5
+
+# --------------------------------
+# Trust Gate
+# --------------------------------
+trust_gate:
+  type: hard
+  tau_conf: 0.90
+  tau_struct: 0.60
+  soft_weight_temp_conf: 10.0
+  soft_weight_temp_struct: 10.0
+  soft_weight_bias: 0.0
+  soft_label_k: 4.0
+  soft_label_t_max: 5.0
+
+# --------------------------------
+# Training
+# --------------------------------
+training:
+  source: gta5
+  target: cityscapes
+  source_root: /data/GTA5
+  target_root: /data/cityscapes
+  heatmap_root: /data/cityscapes
+  crop_size: [512, 512]
+  batch_size: 4
+  num_workers: 4
+  iterations: 40000
+  eval_interval: 2000
+  lambda_target: 1.0
+  aux_loss_weight: 0.4
+  rare_class_sampling: true
+  lr: 2.5e-4
+  poly_power: 0.9
+  optimizer_momentum: 0.9
+  weight_decay: 5.0e-4
+  use_amp: false
+  skip_heatmap: false
+
+# --------------------------------
+# Checkpoint
+# --------------------------------
+checkpoint:
+  save_dir: checkpoints/
+  save_last_every: 2000
+
+# --------------------------------
+# Logging
+# --------------------------------
+logging:
+  backend: wandb
+  project: satg-uda
+  log_every: 50
+  csv_log: true

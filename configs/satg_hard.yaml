@@ -1,0 +1,4 @@
+# SATG Hard Rejection variant
+# Overrides only — merged with default.yaml by the trainer.
+trust_gate:
+  type: hard

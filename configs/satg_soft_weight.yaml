@@ -1,0 +1,7 @@
+# SATG Soft-Weight variant
+# Overrides only — merged with default.yaml by the trainer.
+trust_gate:
+  type: soft_weight
+  soft_weight_temp_conf: 10.0
+  soft_weight_temp_struct: 10.0
+  soft_weight_bias: 0.0

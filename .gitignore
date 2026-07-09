@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.coverage
+.pytest_cache/
+
+# Session/task tracking
+.specify/sessions/
+.omo/run-continuation/
+
+# Knowledge graph cache
+graphify-out/cache/

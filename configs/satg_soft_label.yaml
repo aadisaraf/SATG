@@ -1,0 +1,6 @@
+# SATG Soft-Label variant (PRIMARY contribution)
+# Overrides only — merged with default.yaml by the trainer.
+trust_gate:
+  type: soft_label
+  soft_label_k: 4.0
+  soft_label_t_max: 5.0

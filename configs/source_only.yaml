@@ -1,0 +1,6 @@
+# Source Only baseline — no target pseudo-labeling.
+# lambda_target=0.0 disables target loss entirely.
+# skip_heatmap=true avoids loading .npy files (unused in this baseline).
+training:
+  lambda_target: 0.0
+  skip_heatmap: true
