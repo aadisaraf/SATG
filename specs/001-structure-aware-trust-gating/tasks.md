@@ -76,7 +76,7 @@ Subagents A, B, C, D run in parallel after Phase 0 completes. **Subagent D is th
 
 > Subagents A, B, D work in parallel on PHASE 2. **Subagent D (soft_label) is the primary contribution.**
 
-- [ ] T019a [P] — [US4b/PRIMARY] Write tests for TemperatureSoftLabel in `tests/test_soft_label.py`. Tests to include:
+- [x] T019a [P] — [US4b/PRIMARY] Write tests for TemperatureSoftLabel in `tests/test_soft_label.py`. Tests to include:
   - test_temperature_at_zero_struct_is_one: struct=0 -> T=1.0 exactly
   - test_temperature_increases_with_struct: struct=0.2 -> T=1.8, struct=0.5 -> T=3.0 (using k=4.0 default)
   - test_temperature_capped_at_t_max: struct=1.0, k=10 -> T clamped to T_max
@@ -88,35 +88,35 @@ Subagents A, B, C, D run in parallel after Phase 0 completes. **Subagent D is th
   Dependencies: NONE (uses synthetic fixtures from conftest.py)
   Files: tests/test_soft_label.py. Estimated time: 30–40 min. Acceptance Criterion: Tests exist and FAIL (red phase — TemperatureSoftLabel not implemented). Subagent hint: Subagent D (primary).
 
-- [ ] T019b — [US4b/PRIMARY] Implement `satg/soft_label.py` TemperatureSoftLabel class: `__init__(cfg)` reads k, T_max, tau_conf; `compute_temperature(struct)` computes T=1.0+k*struct clamped to [1.0,T_max]; `compute_soft_targets(teacher_logits, struct)` divides logits by per-pixel T then softmax; `compute_confidence_mask(teacher_logits, tau_conf)` reuses hard gate logic. Files: `satg/soft_label.py`. Estimated time: 30–40 min. Acceptance Criterion: All tests in T019a pass (green phase). Subagent hint: Subagent D (after T019a).
+- [x] T019b — [US4b/PRIMARY] Implement `satg/soft_label.py` TemperatureSoftLabel class: `__init__(cfg)` reads k, T_max, tau_conf; `compute_temperature(struct)` computes T=1.0+k*struct clamped to [1.0,T_max]; `compute_soft_targets(teacher_logits, struct)` divides logits by per-pixel T then softmax; `compute_confidence_mask(teacher_logits, tau_conf)` reuses hard gate logic. Files: `satg/soft_label.py`. Estimated time: 30–40 min. Acceptance Criterion: All tests in T019a pass (green phase). Subagent hint: Subagent D (after T019a).
 
-- [ ] T019c [P] — [US4b/PRIMARY] Write tests for SoftLabelKLLoss in `tests/test_losses.py` (extend existing file). Tests to include:
+- [x] T019c [P] — [US4b/PRIMARY] Write tests for SoftLabelKLLoss in `tests/test_soft_label.py` (extend existing file). Tests to include:
   - test_zero_confidence_mask_gives_zero_loss
   - test_no_nan_with_zero_mask
   - test_identical_distributions_give_near_zero_kl: if student_logits produce the exact same distribution as soft_targets, KL ≈ 0
   - test_loss_increases_with_distribution_mismatch
   - test_output_is_scalar
-  Dependencies: NONE. Files: tests/test_losses.py. Estimated time: 20–30 min. Acceptance Criterion: Tests exist and FAIL (red phase — SoftLabelKLLoss not implemented). Subagent hint: Subagent D (new).
+  Dependencies: NONE. Files: tests/test_soft_label.py. Estimated time: 20–30 min. Acceptance Criterion: Tests exist and FAIL (red phase — SoftLabelKLLoss not implemented). Subagent hint: Subagent D (new).
 
-- [ ] T019d — [US4b/PRIMARY] Implement `satg/losses.py` SoftLabelKLLoss class (nn.Module): `__init__(ignore_index=255)`; `forward(student_logits, soft_targets, confidence_mask)` computes KL divergence masked by confidence, returns 0.0 when mask is all-zero, eps=1e-8 for log safety. Files: `satg/losses.py` (extend existing). Estimated time: 20–30 min. Acceptance Criterion: All new SoftLabelKLLoss tests pass; existing SATGLoss tests still pass. Subagent hint: Subagent D (after T019c).
+- [x] T019d — [US4b/PRIMARY] Implement `satg/losses.py` SoftLabelKLLoss class (nn.Module): `__init__()`; `forward(student_logits, soft_targets, confidence_mask)` computes KL divergence masked by confidence, returns 0.0 when mask is all-zero, eps=1e-8 for log safety. Files: `satg/losses.py` (extend existing). Estimated time: 20–30 min. Acceptance Criterion: All new SoftLabelKLLoss tests pass; existing SATGLoss tests still pass. Subagent hint: Subagent D (after T019c).
 
-- [ ] T012 [P] — [US1] Write tests for StructuralPrior in `tests/test_structural_prior.py`: test output shape matches input, test output values in [0,1], test sky region mean < 0.30, test vegetation mean > 0.60, test deterministic (same input → same output), test only classical CV ops used. Files: `tests/test_structural_prior.py`. Estimated time: 30–40 min. Acceptance Criterion: Tests exist and FAIL (red phase — StructuralPrior not implemented). Subagent hint: Subagent A.
+- [x] T012 [P] — [US1] Write tests for StructuralPrior in `tests/test_structural_prior.py`: test output shape matches input, test output values in [0,1], test sky region mean < 0.30, test vegetation mean > 0.60, test deterministic (same input → same output), test only classical CV ops used. Files: `tests/test_structural_prior.py`. Estimated time: 30–40 min. Acceptance Criterion: Tests exist and FAIL (red phase — StructuralPrior not implemented). Subagent hint: Subagent A.
 
-- [ ] T013 [P] — [US1] Implement `satg/structural_prior.py` StructuralPrior class: RGB→grayscale, Gaussian blur, Canny edge detection, edge density via cv2.filter2D, local variance via cv2.blur, weighted combination, min-max normalization. Config-driven parameters from OmegaConf. Files: `satg/structural_prior.py`. Estimated time: 40–60 min. Acceptance Criterion: All tests in T012 pass; per-image compute < 50ms on CPU. Subagent hint: Subagent A.
+- [x] T013 [P] — [US1] Implement `satg/structural_prior.py` StructuralPrior class: RGB→grayscale, Gaussian blur, Canny edge detection, edge density via cv2.filter2D, local variance via cv2.blur, weighted combination, min-max normalization. Config-driven parameters from OmegaConf. Files: `satg/structural_prior.py`. Estimated time: 40–60 min. Acceptance Criterion: All tests in T012 pass; per-image compute < 50ms on CPU. Subagent hint: Subagent A.
 
-- [ ] T014 [P] — [US1] Write and pass batch_compute test: test `batch_compute([img1, img2])` returns list of heatmaps with correct shapes. Update `tests/test_structural_prior.py`. Files: `tests/test_structural_prior.py`, `satg/structural_prior.py`. Estimated time: 15–20 min. Acceptance Criterion: batch_compute works for lists of varying-size images. Subagent hint: Subagent A.
+- [x] T014 [P] — [US1] Write and pass batch_compute test: test `batch_compute([img1, img2])` returns list of heatmaps with correct shapes. Update `tests/test_structural_prior.py`. Files: `tests/test_structural_prior.py`, `satg/structural_prior.py`. Estimated time: 15–20 min. Acceptance Criterion: batch_compute works for lists of varying-size images. Subagent hint: Subagent A.
 
-- [ ] T015 [P] — [US3] Write tests for HardTrustGate and SoftTrustGate in `tests/test_trust_gate.py`: test hard mask is binary {0.0, 1.0}, test hard mask = 1.0 iff confidence > tau_conf AND struct < tau_struct, test soft weights in [0,1], test soft monotonicity (increasing confidence → non-decreasing weight, increasing structure → non-increasing weight), test edge case all-rejected → zero weights. Files: `tests/test_trust_gate.py`. Estimated time: 30–40 min. Acceptance Criterion: Tests exist and FAIL (red phase). Subagent hint: Subagent B.
+- [x] T015 [P] — [US3] Write tests for HardTrustGate and SoftTrustGate in `tests/test_trust_gate.py`: test hard mask is binary {0.0, 1.0}, test hard mask = 1.0 iff confidence > tau_conf AND struct < tau_struct, test soft weights in [0,1], test soft monotonicity (increasing confidence → non-decreasing weight, increasing structure → non-increasing weight), test edge case all-rejected → zero weights. Files: `tests/test_trust_gate.py`. Estimated time: 30–40 min. Acceptance Criterion: Tests exist and FAIL (red phase). Subagent hint: Subagent B.
 
-- [ ] T016 [P] — [US3] Implement `satg/trust_gate.py` HardTrustGate class: binary mask = (confidence > tau_conf) AND (structure < tau_struct). Files: `satg/trust_gate.py`. Estimated time: 15–20 min. Acceptance Criterion: HardTrustGate tests pass. Subagent hint: Subagent B.
+- [x] T016 [P] — [US3] Implement `satg/trust_gate.py` HardTrustGate class: binary mask = (confidence > tau_conf) AND (structure < tau_struct). Files: `satg/trust_gate.py`. Estimated time: 15–20 min. Acceptance Criterion: HardTrustGate tests pass. Subagent hint: Subagent B.
 
-- [ ] T017 [P] — [US4] Implement `satg/trust_gate.py` SoftTrustGate class: sigmoid(β₀ + β₁·confidence − β₂·structure). Extend `tests/test_trust_gate.py` with soft variant tests. Files: `satg/trust_gate.py`, `tests/test_trust_gate.py`. Estimated time: 20–30 min. Acceptance Criterion: SoftTrustGate tests pass; monotonicity verified. Subagent hint: Subagent B.
+- [x] T017 [P] — [US4] Implement `satg/trust_gate.py` SoftTrustGate class: sigmoid((conf-0.5)*temp_conf + bias) * sigmoid((tau_struct-struct)*temp_struct). Extend `tests/test_trust_gate.py` with soft variant tests. Files: `satg/trust_gate.py`, `tests/test_trust_gate.py`. Estimated time: 20–30 min. Acceptance Criterion: SoftTrustGate tests pass; monotonicity verified. Subagent hint: Subagent B.
 
-- [ ] T018 — [US3] Write tests for SATGLoss in `tests/test_losses.py`: test output is scalar ≥ 0, test zero trust weights → loss = 0.0, test no NaN/Inf, test ignore_index=255 excluded. Files: `tests/test_losses.py`. Estimated time: 20–30 min. Acceptance Criterion: Tests exist and FAIL (red phase). Subagent hint: Subagent B (after T017; depends on trust_gate.py).
+- [x] T018 — [US3] Write tests for SATGLoss in `tests/test_losses.py`: test output is scalar ≥ 0, test zero trust weights → loss = 0.0, test no NaN/Inf, test ignore_index=255 excluded. Files: `tests/test_losses.py`. Estimated time: 20–30 min. Acceptance Criterion: Tests exist and FAIL (red phase). Subagent hint: Subagent B (after T017; depends on trust_gate.py).
 
-- [ ] T019 — [US3] Implement `satg/losses.py` SATGLoss class: per-pixel CE with reduction='none', weighted sum with trust_weights, zero-weight guard. Files: `satg/losses.py`. Estimated time: 20–30 min. Acceptance Criterion: All SATGLoss tests pass; zero-weight edge case returns 0.0. Subagent hint: Subagent B (after T018; depends on trust_gate.py and test interface).
+- [x] T019 — [US3] Implement `satg/losses.py` SATGLoss class: per-pixel CE with reduction='none', weighted sum with trust_weights, zero-weight guard. Files: `satg/losses.py`. Estimated time: 20–30 min. Acceptance Criterion: All SATGLoss tests pass; zero-weight edge case returns 0.0. Subagent hint: Subagent B (after T018; depends on trust_gate.py and test interface).
 
-- [ ] T019a [P] — [US4b] Write tests for TemperatureSoftLabel in `tests/test_soft_label.py`. Tests to include:
+- [x] T019a [P] — [US4b] Write tests for TemperatureSoftLabel in `tests/test_soft_label.py`. Tests to include:
   - test_temperature_at_zero_struct_is_one: struct=0 -> T=1.0 exactly
   - test_temperature_increases_with_struct: struct=0.2 -> T=1.8, struct=0.5 -> T=3.0 (using k=4.0 default)
   - test_temperature_capped_at_t_max: struct=1.0, k=10 -> T clamped to T_max
@@ -128,17 +128,17 @@ Subagents A, B, C, D run in parallel after Phase 0 completes. **Subagent D is th
   Dependencies: NONE (uses synthetic fixtures from conftest.py)
   Files: tests/test_soft_label.py. Estimated time: 30–40 min. Acceptance Criterion: Tests exist and FAIL (red phase — TemperatureSoftLabel not implemented). Subagent hint: Subagent D (new).
 
-- [ ] T019b — [US4b] Implement `satg/soft_label.py` TemperatureSoftLabel class: `__init__(cfg)` reads k, T_max, tau_conf; `compute_temperature(struct)` computes T=1.0+k*struct clamped to [1.0,T_max]; `compute_soft_targets(teacher_logits, struct)` divides logits by per-pixel T then softmax; `compute_confidence_mask(teacher_logits, tau_conf)` reuses hard gate logic. Files: `satg/soft_label.py`. Estimated time: 30–40 min. Acceptance Criterion: All tests in T019a pass (green phase). Subagent hint: Subagent D (after T019a).
+- [x] T019b — [US4b] Implement `satg/soft_label.py` TemperatureSoftLabel class: `__init__(cfg)` reads k, T_max, tau_conf; `compute_temperature(struct)` computes T=1.0+k*struct clamped to [1.0,T_max]; `compute_soft_targets(teacher_logits, struct)` divides logits by per-pixel T then softmax; `compute_confidence_mask(teacher_logits, tau_conf)` reuses hard gate logic. Files: `satg/soft_label.py`. Estimated time: 30–40 min. Acceptance Criterion: All tests in T019a pass (green phase). Subagent hint: Subagent D (after T019a).
 
-- [ ] T019c [P] — [US4b] Write tests for SoftLabelKLLoss in `tests/test_losses.py` (extend existing file). Tests to include:
+- [x] T019c [P] — [US4b] Write tests for SoftLabelKLLoss in `tests/test_soft_label.py` (extend existing file). Tests to include:
   - test_zero_confidence_mask_gives_zero_loss
   - test_no_nan_with_zero_mask
   - test_identical_distributions_give_near_zero_kl: if student_logits produce the exact same distribution as soft_targets, KL ≈ 0
   - test_loss_increases_with_distribution_mismatch
   - test_output_is_scalar
-  Dependencies: NONE. Files: tests/test_losses.py. Estimated time: 20–30 min. Acceptance Criterion: Tests exist and FAIL (red phase — SoftLabelKLLoss not implemented). Subagent hint: Subagent D (new).
+  Dependencies: NONE. Files: tests/test_soft_label.py. Estimated time: 20–30 min. Acceptance Criterion: Tests exist and FAIL (red phase — SoftLabelKLLoss not implemented). Subagent hint: Subagent D (new).
 
-- [ ] T019d — [US4b] Implement `satg/losses.py` SoftLabelKLLoss class (nn.Module): `__init__(ignore_index=255)`; `forward(student_logits, soft_targets, confidence_mask)` computes KL divergence masked by confidence, returns 0.0 when mask is all-zero, eps=1e-8 for log safety. Files: `satg/losses.py` (extend existing). Estimated time: 20–30 min. Acceptance Criterion: All new SoftLabelKLLoss tests pass; existing SATGLoss tests still pass. Subagent hint: Subagent D (after T019c).
+- [x] T019d — [US4b] Implement `satg/losses.py` SoftLabelKLLoss class (nn.Module): `__init__()`; `forward(student_logits, soft_targets, confidence_mask)` computes KL divergence masked by confidence, returns 0.0 when mask is all-zero, eps=1e-8 for log safety. Files: `satg/losses.py` (extend existing). Estimated time: 20–30 min. Acceptance Criterion: All new SoftLabelKLLoss tests pass; existing SATGLoss tests still pass. Subagent hint: Subagent D (after T019c).
 
 **Checkpoint**: Phase 2 complete — structural prior, trust gates, and loss function all tested and working independently.
 

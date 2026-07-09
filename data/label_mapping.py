@@ -1,10 +1,10 @@
 """GTA5 → Cityscapes 19-class label mapping.
 
-GTA5 provides 33 semantic class IDs (0–32) with RGB palette-encoded labels.
-GTA5 classes 0–18 use the SAME RGB palette as Cityscapes train IDs 0–18.
-Classes 19–32 are GTA5-only and map to ignore (255).
+GTA5 provides 35 semantic class indices (0–34) encoded as single-channel
+indexed PNGs (NOT RGB palette). This module maps GTA5 class indices to
+Cityscapes 19-class trainIDs (0–18) or 255 (ignore).
 
-Reference: AdaptSegNet / DAFormer convention.
+The standard AdaptSegNet / DAFormer convention is used for the mapping.
 """
 
 from typing import Dict, Tuple
@@ -12,37 +12,63 @@ from typing import Dict, Tuple
 import numpy as np
 
 # ---------------------------------------------------------------------------
-# GTA5 class ID → Cityscapes train ID
+# GTA5 class index → Cityscapes train ID  (35 entries, indices 0–34)
 # ---------------------------------------------------------------------------
-# GTA5 classes 0–18 map 1:1 to Cityscapes train IDs 0–18.
-# GTA5-only classes 19–32 are mapped to 255 (ignore).
-GTA5_TO_CITYSCAPES: Dict[int, int] = {
-    0: 0,  # road
-    1: 1,  # sidewalk
-    2: 2,  # building
-    3: 3,  # wall
-    4: 4,  # fence
-    5: 5,  # pole
-    6: 6,  # traffic light
-    7: 7,  # traffic sign
-    8: 8,  # vegetation
-    9: 9,  # terrain
-    10: 10,  # sky
-    11: 11,  # person
-    12: 12,  # rider
-    13: 13,  # car
-    14: 14,  # truck
-    15: 15,  # bus
-    16: 16,  # train
-    17: 17,  # motorcycle
-    18: 18,  # bicycle
-    19: 255,  # GTA5-only → ignore
-    20: 255,
-    21: 255,
-    22: 255,
-    23: 255,
-    24: 255,
-    25: 255,
+# Standard AdaptSegNet mapping (GTA5 dataset has 35 classes, 0–34):
+#   GTA5 0 (unlabeled)     → 255
+#   GTA5 1 (ego vehicle)   → 255
+#   GTA5 2 (rect border)   → 255
+#   GTA5 3 (out of roi)    → 255
+#   GTA5 4 (static)        → 255
+#   GTA5 5 (dynamic)       → 255
+#   GTA5 6 (ground)        → 255
+#   GTA5 7 (road)          →   0
+#   GTA5 8 (sidewalk)      →   1
+#   GTA5 9 (building)      →   2
+#   GTA5 10 (wall)         →   3
+#   GTA5 11 (fence)        →   4
+#   GTA5 12 (pole)         →   5
+#   GTA5 13 (traffic light) →  6
+#   GTA5 14 (traffic sign)  →  7
+#   GTA5 15 (vegetation)   →   8
+#   GTA5 16 (terrain)      →   9
+#   GTA5 17 (sky)          →  10
+#   GTA5 18 (person)       →  11
+#   GTA5 19 (rider)        →  12
+#   GTA5 20 (car)          →  13
+#   GTA5 21 (truck)        →  14
+#   GTA5 22 (bus)          →  15
+#   GTA5 23 (train)        →  16
+#   GTA5 24 (motorcycle)   →  17
+#   GTA5 25 (bicycle)      →  18
+#   GTA5 26–34 (unused)    → 255
+GTA5_TO_CITYSCAPES_19: Dict[int, int] = {
+    0: 255,  # unlabeled → ignore
+    1: 255,  # ego vehicle → ignore
+    2: 255,  # rect border → ignore
+    3: 255,  # out of roi → ignore
+    4: 255,  # static → ignore
+    5: 255,  # dynamic → ignore
+    6: 255,  # ground → ignore
+    7: 0,    # road
+    8: 1,    # sidewalk
+    9: 2,    # building
+    10: 3,   # wall
+    11: 4,   # fence
+    12: 5,   # pole
+    13: 6,   # traffic light
+    14: 7,   # traffic sign
+    15: 8,   # vegetation
+    16: 9,   # terrain
+    17: 10,  # sky
+    18: 11,  # person
+    19: 12,  # rider
+    20: 13,  # car
+    21: 14,  # truck
+    22: 15,  # bus
+    23: 16,  # train
+    24: 17,  # motorcycle
+    25: 18,  # bicycle
     26: 255,
     27: 255,
     28: 255,
@@ -50,6 +76,8 @@ GTA5_TO_CITYSCAPES: Dict[int, int] = {
     30: 255,
     31: 255,
     32: 255,
+    33: 255,
+    34: 255,
 }
 
 # ---------------------------------------------------------------------------
@@ -111,3 +139,7 @@ def map_gta5_label(label_rgb: np.ndarray) -> np.ndarray:
         out[mask] = train_id
 
     return out.reshape(h, w)
+
+
+# Backward-compatibility alias (legacy name used in earlier code).
+GTA5_TO_CITYSCAPES: Dict[int, int] = GTA5_TO_CITYSCAPES_19

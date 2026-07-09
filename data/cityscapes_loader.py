@@ -115,25 +115,27 @@ class CityscapesDataset(Dataset):
 
         # --- Load heatmap ---
         if self.skip_heatmap:
-            # Return all-ones dummy so trainer logic works uniformly
-            heatmap = np.ones(img_rgb.shape[:2], dtype=np.float32)
+            img_tensor = torch.from_numpy((img_rgb - _MEAN) / _STD).permute(2, 0, 1).float()
+            return img_tensor, torch.zeros(1)
+
+        stem = img_path.name[: -len(_IMG_SUFFIX)]
+        rel = img_path.relative_to(
+            img_path.parent.parent.parent
+        )  # leftImg8bit/train/city/stem_leftImg8bit.png
+        if self._heatmap_root is not None:
+            heat_path = (
+                self._heatmap_root
+                / rel.parent.parent
+                / rel.parent.name
+                / f"{stem}{_HEATMAP_SUFFIX}"
+            )
         else:
-            stem = img_path.name[: -len(_IMG_SUFFIX)]
-            rel = img_path.relative_to(
-                img_path.parent.parent.parent
-            )  # leftImg8bit/train/city/stem_leftImg8bit.png
-            # Try heatmap mirroring image path structure
-            if self._heatmap_root is not None:
-                heat_path = (
-                    self._heatmap_root
-                    / rel.parent.parent
-                    / rel.parent.name
-                    / f"{stem}{_HEATMAP_SUFFIX}"
-                )
-            else:
-                # Fall back to same directory as image
-                heat_path = img_path.with_name(f"{stem}{_HEATMAP_SUFFIX}")
-            heatmap = np.load(str(heat_path)).astype(np.float32)
+            heat_path = img_path.with_name(f"{stem}{_HEATMAP_SUFFIX}")
+
+        if not heat_path.exists():
+            raise FileNotFoundError(f"Heatmap not found: {heat_path}")
+
+        heatmap = np.load(str(heat_path)).astype(np.float32)
 
         # --- Augmentation (spatial only: flip + crop) ---
         if self.augment:

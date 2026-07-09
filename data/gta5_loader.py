@@ -37,6 +37,8 @@ class GTA5Dataset(Dataset):
             (spatial transforms + colour jitter).
     """
 
+    LABEL_SUFFIX = "_trainids.png"
+
     def __init__(
         self,
         root: str,
@@ -44,6 +46,7 @@ class GTA5Dataset(Dataset):
         label_subdir: str = "labels/train",
         crop_size: Optional[Tuple[int, int]] = None,
         augment: bool = False,
+        label_suffix: str = "",
     ) -> None:
         super().__init__()
         self.root = Path(root)
@@ -51,21 +54,62 @@ class GTA5Dataset(Dataset):
         self.label_dir = self.root / label_subdir
         self.crop_size = crop_size
         self.augment = augment
+        self.label_suffix = label_suffix
 
-        # Recursively discover image files
         self._samples: list[Tuple[Path, Path]] = []
         for img_path in sorted(self.img_dir.rglob("*.png")):
-            # Derive the corresponding label path by replacing img_subdir
-            # with label_subdir in the relative path
             rel = img_path.relative_to(self.img_dir)
-            label_path = self.label_dir / rel
+            if label_suffix:
+                label_path = self.label_dir / rel.parent / f"{img_path.stem}{label_suffix}"
+            else:
+                label_path = self.label_dir / rel
             if label_path.exists():
                 self._samples.append((img_path, label_path))
 
         if len(self._samples) == 0:
             raise FileNotFoundError(
-                f"No PNG files found in {self.img_dir} " f"with matching labels in {self.label_dir}"
+                f"No PNG files found in {self.img_dir} "
+                f"with matching {label_suffix} labels in {self.label_dir}"
             )
+
+        # Cache for lazy-computed class weights
+        self._rare_class_weights: Optional[torch.Tensor] = None
+
+    @property
+    def rare_class_weights(self) -> torch.Tensor:
+        """Inverse-frequency rare-class weights, shape ``(19,)``, clipped ``[0.1, 10.0]``.
+
+        Computed lazily on first access.  Formula per class *c*:
+
+            weight[c] = N / (count[c] * 19)
+
+        where *N* is total labelled pixels across all samples and
+        *count[c]* is the per-class pixel count, clipped to ``[0.1, 10.0]``.
+        """
+        if self._rare_class_weights is not None:
+            return self._rare_class_weights
+
+        counts = torch.zeros(19, dtype=torch.float64)
+        total_pixels = 0
+
+        for _, label_path in self._samples:
+            label_raw = cv2.imread(str(label_path), cv2.IMREAD_UNCHANGED)
+            if label_raw is None or label_raw.ndim != 2:
+                continue
+            label = torch.from_numpy(label_raw).long()
+            for c in range(19):
+                counts[c] += (label == c).sum().item()
+            total_pixels += label.numel()
+
+        # Inverse frequency with clipping
+        weights = torch.where(
+            counts > 0,
+            torch.tensor(total_pixels, dtype=torch.float64) / (counts * 19),
+            torch.tensor(0.0, dtype=torch.float64),
+        )
+        weights = weights.clamp(0.1, 10.0).float()
+        self._rare_class_weights = weights
+        return weights
 
     def __len__(self) -> int:
         return len(self._samples)
@@ -84,14 +128,18 @@ class GTA5Dataset(Dataset):
         if label_raw is None:
             raise FileNotFoundError(f"Failed to load label: {label_path}")
 
-        # If label is RGB palette-encoded, convert to trainIDs
-        if label_raw.ndim == 3:
+        if self.label_suffix:
+            # Pre-mapped trainids (e.g. *_trainids.png) — values already in
+            # Cityscapes trainID space {0..18, 255}; no mapping needed.
+            label = label_raw
+        elif label_raw.ndim == 3:
+            # RGB palette-encoded GTA5 label → convert to Cityscapes trainIDs
             label = map_gta5_label(label_raw)
         else:
-            # Already an index map — map GTA5 IDs → Cityscapes trainIDs
-            from data.label_mapping import GTA5_TO_CITYSCAPES
+            # Raw GTA5 index map (values 0..34) → Cityscapes trainIDs
+            from data.label_mapping import GTA5_TO_CITYSCAPES_19
 
-            label = np.vectorize(GTA5_TO_CITYSCAPES.__getitem__)(label_raw).astype(np.uint8)
+            label = np.vectorize(GTA5_TO_CITYSCAPES_19.__getitem__)(label_raw).astype(np.uint8)
 
         # --- Source-domain augmentation ---
         if self.augment and self.crop_size is not None:
