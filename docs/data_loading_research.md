@@ -835,10 +835,14 @@ class CityscapesDataset(Dataset):
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         image = Image.fromarray(image)
         
-        # Load precomputed heatmap
-        heatmap_name = img_path.stem.replace('_leftImg8bit', '_satg_heatmap.npy')
-        heatmap_path = self.heatmap_dir / heatmap_name
-        heatmap = np.load(str(heatmap_path))
+        # Load precomputed heatmap (4 components combined at load time)
+        stem = img_path.stem.replace('_leftImg8bit', '')
+        comps = {}
+        for key in ('edge', 'var', 'ent', 'corn'):
+            p = self.heatmap_dir / f"{stem}_satg_{key}.npy"
+            comps[key] = np.load(str(p))
+        heatmap = 0.25 * sum(comps.values())  # weighted combination from config
+        heatmap = np.clip(heatmap, 0, 1)
         heatmap = torch.from_numpy(heatmap).float()
         
         if self.transform:
@@ -852,7 +856,7 @@ class CityscapesDataset(Dataset):
 ```python
 # Recommended DataLoader settings
 source_loader = DataLoader(
-    GTA5Dataset(root='data/GTA5', transform=gta5_transform),
+    GTA5Dataset(root='/Users/aadisaraf/Documents/research/SATG/data/GTA5', transform=gta5_transform),
     batch_size=1,
     shuffle=True,
     num_workers=4,

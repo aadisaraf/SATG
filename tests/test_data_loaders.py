@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 import pytest
 import torch
+from omegaconf import OmegaConf
 
 
 # =============================================================================
@@ -189,7 +190,7 @@ class TestGTA5Loader:
         from data.gta5_loader import GTA5Dataset
 
         dataset = GTA5Dataset(
-            root=str(gta5_data_root),
+            root_or_cfg=str(gta5_data_root),
             img_subdir="images/train",
             label_subdir="labels/train",
         )
@@ -200,7 +201,7 @@ class TestGTA5Loader:
         from data.gta5_loader import GTA5Dataset
 
         dataset = GTA5Dataset(
-            root=str(gta5_data_root),
+            root_or_cfg=str(gta5_data_root),
             img_subdir="images/train",
             label_subdir="labels/train",
         )
@@ -213,7 +214,7 @@ class TestGTA5Loader:
         from data.gta5_loader import GTA5Dataset
 
         dataset = GTA5Dataset(
-            root=str(gta5_data_root),
+            root_or_cfg=str(gta5_data_root),
             img_subdir="images/train",
             label_subdir="labels/train",
         )
@@ -228,7 +229,7 @@ class TestGTA5Loader:
         from data.gta5_loader import GTA5Dataset
 
         dataset = GTA5Dataset(
-            root=str(gta5_data_root),
+            root_or_cfg=str(gta5_data_root),
             img_subdir="images/train",
             label_subdir="labels/train",
         )
@@ -240,7 +241,7 @@ class TestGTA5Loader:
         from data.gta5_loader import GTA5Dataset
 
         dataset = GTA5Dataset(
-            root=str(gta5_data_root),
+            root_or_cfg=str(gta5_data_root),
             img_subdir="images/train",
             label_subdir="labels/train",
         )
@@ -252,7 +253,7 @@ class TestGTA5Loader:
         from data.gta5_loader import GTA5Dataset
 
         dataset = GTA5Dataset(
-            root=str(gta5_data_root),
+            root_or_cfg=str(gta5_data_root),
             img_subdir="images/train",
             label_subdir="labels/train",
         )
@@ -264,7 +265,7 @@ class TestGTA5Loader:
         from data.gta5_loader import GTA5Dataset
 
         dataset = GTA5Dataset(
-            root=str(gta5_data_root),
+            root_or_cfg=str(gta5_data_root),
             img_subdir="images/train",
             label_subdir="labels/train",
         )
@@ -279,7 +280,7 @@ class TestGTA5Loader:
         from data.gta5_loader import GTA5Dataset
 
         dataset = GTA5Dataset(
-            root=str(gta5_data_root),
+            root_or_cfg=str(gta5_data_root),
             img_subdir="images/train",
             label_subdir="labels/train",
         )
@@ -308,7 +309,7 @@ def cityscapes_data_root():
             train/cityA/cityA_000001_gtFine_labelTrainIds.png
             train/cityB/cityB_000001_gtFine_labelTrainIds.png
             val/cityC/cityC_000001_gtFine_labelTrainIds.png
-          heatmaps/ (mirrors leftImg8bit/train structure with .npy files)
+          (heatmaps saved alongside images in leftImg8bit/train/)
     """
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -321,23 +322,21 @@ def cityscapes_data_root():
             "cityC": ["000004_000000"],
         }
 
-        # Training images + labels + heatmaps
+
         for city, stems in cities_train.items():
             img_dir = root / "leftImg8bit" / "train" / city
             lbl_dir = root / "gtFine" / "train" / city
-            heat_dir = root / "heatmaps" / "train" / city
             img_dir.mkdir(parents=True)
             lbl_dir.mkdir(parents=True)
-            heat_dir.mkdir(parents=True)
             for stem in stems:
                 img = np.random.randint(0, 256, (64, 64, 3), dtype=np.uint8)
                 cv2.imwrite(str(img_dir / f"{stem}_leftImg8bit.png"), img)
                 # label values in 0..18 ∪ {255}
                 label = np.random.choice(list(range(19)) + [255], (64, 64)).astype(np.uint8)
                 cv2.imwrite(str(lbl_dir / f"{stem}_gtFine_labelTrainIds.png"), label)
-                # heatmap .npy
-                heatmap = np.random.rand(64, 64).astype(np.float32)
-                np.save(str(heat_dir / f"{stem}_satg_heatmap.npy"), heatmap)
+                for suffix in ['_satg_edge.npy', '_satg_var.npy', '_satg_ent.npy', '_satg_corn.npy']:
+                    component = np.random.rand(64, 64).astype(np.float32)
+                    np.save(str(img_dir / f"{stem}{suffix}"), component)
 
         # Validation images + labels (no heatmaps)
         for city, stems in cities_val.items():
@@ -366,9 +365,9 @@ class TestCityscapesLoader:
         from data.cityscapes_loader import CityscapesDataset
 
         dataset = CityscapesDataset(
-            root=str(cityscapes_data_root),
+            root_or_cfg=str(cityscapes_data_root),
             split="train",
-            heatmap_root=str(cityscapes_data_root / "heatmaps"),
+            
         )
         assert len(dataset) == 3, f"Expected 3, got {len(dataset)}"
 
@@ -377,9 +376,9 @@ class TestCityscapesLoader:
         from data.cityscapes_loader import CityscapesDataset
 
         dataset = CityscapesDataset(
-            root=str(cityscapes_data_root),
+            root_or_cfg=str(cityscapes_data_root),
             split="train",
-            heatmap_root=str(cityscapes_data_root / "heatmaps"),
+            
         )
         img, heatmap = dataset[0]
         assert isinstance(img, torch.Tensor)
@@ -390,9 +389,9 @@ class TestCityscapesLoader:
         from data.cityscapes_loader import CityscapesDataset
 
         dataset = CityscapesDataset(
-            root=str(cityscapes_data_root),
+            root_or_cfg=str(cityscapes_data_root),
             split="train",
-            heatmap_root=str(cityscapes_data_root / "heatmaps"),
+            
         )
         img, heatmap = dataset[0]
         assert heatmap.dim() == 2, f"Expected 2D, got {heatmap.dim()}D"
@@ -404,9 +403,9 @@ class TestCityscapesLoader:
         from data.cityscapes_loader import CityscapesDataset
 
         dataset = CityscapesDataset(
-            root=str(cityscapes_data_root),
+            root_or_cfg=str(cityscapes_data_root),
             split="train",
-            heatmap_root=str(cityscapes_data_root / "heatmaps"),
+            
         )
         _, heatmap = dataset[0]
         assert heatmap.min() >= 0.0, f"Min heatmap value {heatmap.min()}"
@@ -417,9 +416,9 @@ class TestCityscapesLoader:
         from data.cityscapes_loader import CityscapesDataset
 
         dataset = CityscapesDataset(
-            root=str(cityscapes_data_root),
+            root_or_cfg=str(cityscapes_data_root),
             split="train",
-            heatmap_root=str(cityscapes_data_root / "heatmaps"),
+            
         )
         _, heatmap = dataset[0]
         assert heatmap.dtype == torch.float32, f"Expected float32, got {heatmap.dtype}"
@@ -429,7 +428,7 @@ class TestCityscapesLoader:
         from data.cityscapes_loader import CityscapesDataset
 
         dataset = CityscapesDataset(
-            root=str(cityscapes_data_root),
+            root_or_cfg=str(cityscapes_data_root),
             split="train",
             skip_heatmap=True,
         )
@@ -447,14 +446,14 @@ class TestCityscapesLoader:
         """Dataset.__len__ returns correct count for val split."""
         from data.cityscapes_loader import CityscapesDataset
 
-        dataset = CityscapesDataset(root=str(cityscapes_data_root), split="val")
+        dataset = CityscapesDataset(root_or_cfg=str(cityscapes_data_root), split="val")
         assert len(dataset) == 1, f"Expected 1, got {len(dataset)}"
 
     def test_val_getitem_returns_tuple(self, cityscapes_data_root):
         """Val __getitem__ returns (image, label)."""
         from data.cityscapes_loader import CityscapesDataset
 
-        dataset = CityscapesDataset(root=str(cityscapes_data_root), split="val")
+        dataset = CityscapesDataset(root_or_cfg=str(cityscapes_data_root), split="val")
         img, label = dataset[0]
         assert isinstance(img, torch.Tensor)
         assert isinstance(label, torch.Tensor)
@@ -463,7 +462,7 @@ class TestCityscapesLoader:
         """Val label is 2D (H, W)."""
         from data.cityscapes_loader import CityscapesDataset
 
-        dataset = CityscapesDataset(root=str(cityscapes_data_root), split="val")
+        dataset = CityscapesDataset(root_or_cfg=str(cityscapes_data_root), split="val")
         _, label = dataset[0]
         assert label.dim() == 2
 
@@ -471,7 +470,7 @@ class TestCityscapesLoader:
         """Val label dtype is torch.long for cross-entropy."""
         from data.cityscapes_loader import CityscapesDataset
 
-        dataset = CityscapesDataset(root=str(cityscapes_data_root), split="val")
+        dataset = CityscapesDataset(root_or_cfg=str(cityscapes_data_root), split="val")
         _, label = dataset[0]
         assert label.dtype == torch.long
 
@@ -479,7 +478,7 @@ class TestCityscapesLoader:
         """Val label values in {0..18} ∪ {255}."""
         from data.cityscapes_loader import CityscapesDataset
 
-        dataset = CityscapesDataset(root=str(cityscapes_data_root), split="val")
+        dataset = CityscapesDataset(root_or_cfg=str(cityscapes_data_root), split="val")
         _, label = dataset[0]
         valid = set(range(19)) | {255}
         unique_vals = set(label.unique().tolist())
@@ -491,9 +490,9 @@ class TestCityscapesLoader:
         from data.cityscapes_loader import CityscapesDataset
 
         dataset = CityscapesDataset(
-            root=str(cityscapes_data_root),
+            root_or_cfg=str(cityscapes_data_root),
             split="train",
-            heatmap_root=str(cityscapes_data_root / "heatmaps"),
+            
         )
         img, _ = dataset[0]
         assert img.dim() == 3
@@ -507,7 +506,7 @@ class TestCityscapesLoader:
         from data.cityscapes_loader import CityscapesDataset
 
         with pytest.raises(ValueError, match="split"):
-            CityscapesDataset(root=str(cityscapes_data_root), split="invalid")
+            CityscapesDataset(root_or_cfg=str(cityscapes_data_root), split="invalid")
 
     # ------------------------------------------------------------------ #
     # T010b: Augmentation consistency test (RISK-04)
@@ -519,9 +518,9 @@ class TestCityscapesLoader:
         from data.cityscapes_loader import CityscapesDataset
 
         dataset = CityscapesDataset(
-            root=str(cityscapes_data_root),
+            root_or_cfg=str(cityscapes_data_root),
             split="train",
-            heatmap_root=str(cityscapes_data_root / "heatmaps"),
+            
             crop_size=(32, 32),
             augment=True,
         )
@@ -539,18 +538,18 @@ class TestCityscapesLoader:
 
         # Load with explicit crop but no random flip (seed-controlled)
         dataset = CityscapesDataset(
-            root=str(cityscapes_data_root),
+            root_or_cfg=str(cityscapes_data_root),
             split="train",
-            heatmap_root=str(cityscapes_data_root / "heatmaps"),
+            
             crop_size=(32, 32),
             augment=False,  # no augmentation = baseline
         )
         img_no_aug, heatmap_no_aug = dataset[0]
 
         dataset_aug = CityscapesDataset(
-            root=str(cityscapes_data_root),
+            root_or_cfg=str(cityscapes_data_root),
             split="train",
-            heatmap_root=str(cityscapes_data_root / "heatmaps"),
+            
             crop_size=(32, 32),
             augment=True,
         )
@@ -565,9 +564,9 @@ class TestCityscapesLoader:
         from data.cityscapes_loader import CityscapesDataset
 
         dataset = CityscapesDataset(
-            root=str(cityscapes_data_root),
+            root_or_cfg=str(cityscapes_data_root),
             split="train",
-            heatmap_root=str(cityscapes_data_root / "heatmaps"),
+            
             crop_size=(32, 32),
             augment=True,
         )
@@ -590,7 +589,7 @@ class TestCityscapesDataset:
         from data.cityscapes_loader import CityscapesDataset
 
         dataset = CityscapesDataset(
-            root=str(cityscapes_data_root),
+            root_or_cfg=str(cityscapes_data_root),
             split="train",
             skip_heatmap=True,
         )
@@ -608,9 +607,9 @@ class TestCityscapesDataset:
         from data.cityscapes_loader import CityscapesDataset
 
         dataset = CityscapesDataset(
-            root=str(cityscapes_data_root),
+            root_or_cfg=str(cityscapes_data_root),
             split="train",
-            heatmap_root=str(cityscapes_data_root / "heatmaps"),
+            
         )
         img, heatmap = dataset[0]
         assert isinstance(heatmap, torch.Tensor)
@@ -623,7 +622,7 @@ class TestCityscapesDataset:
         """Val split → (Tensor[3,H,W], Tensor[H,W])."""
         from data.cityscapes_loader import CityscapesDataset
 
-        dataset = CityscapesDataset(root=str(cityscapes_data_root), split="val")
+        dataset = CityscapesDataset(root_or_cfg=str(cityscapes_data_root), split="val")
         img, label = dataset[0]
         assert isinstance(img, torch.Tensor)
         assert isinstance(label, torch.Tensor)
@@ -636,9 +635,9 @@ class TestCityscapesDataset:
         from data.cityscapes_loader import CityscapesDataset
 
         dataset = CityscapesDataset(
-            root=str(cityscapes_data_root),
+            root_or_cfg=str(cityscapes_data_root),
             split="train",
-            heatmap_root=str(cityscapes_data_root / "heatmaps"),
+            
             crop_size=(32, 32),
             augment=True,
         )
@@ -652,9 +651,9 @@ class TestCityscapesDataset:
         from data.cityscapes_loader import CityscapesDataset
 
         dataset = CityscapesDataset(
-            root=str(cityscapes_data_root),
+            root_or_cfg=str(cityscapes_data_root),
             split="train",
-            heatmap_root=str(cityscapes_data_root / "heatmaps"),
+            
             crop_size=(32, 32),
             augment=True,
         )
@@ -667,9 +666,9 @@ class TestCityscapesDataset:
         from data.cityscapes_loader import CityscapesDataset
 
         dataset = CityscapesDataset(
-            root=str(cityscapes_data_root),
+            root_or_cfg=str(cityscapes_data_root),
             split="train",
-            heatmap_root=str(cityscapes_data_root / "heatmaps"),
+            
             crop_size=(32, 32),
             augment=True,
         )
@@ -681,15 +680,95 @@ class TestCityscapesDataset:
         """FileNotFoundError if .npy missing and skip_heatmap=False."""
         from data.cityscapes_loader import CityscapesDataset
 
-        # heatmap_root = None → falls back to same-dir lookup which won't have .npy
+        for npy in (cityscapes_data_root / "leftImg8bit" / "train" / "cityA").glob("*_satg_*.npy"):
+            npy.unlink()
         dataset = CityscapesDataset(
-            root=str(cityscapes_data_root),
+            root_or_cfg=str(cityscapes_data_root),
             split="train",
             heatmap_root=None,
             skip_heatmap=False,
         )
         with pytest.raises(FileNotFoundError):
             _ = dataset[0]
+
+    def test_old_single_heatmap_format_raises(self, cityscapes_data_root):
+        """Old *_satg_heatmap.npy format (single file) must raise FileNotFoundError."""
+        from data.cityscapes_loader import CityscapesDataset
+
+        # Remove all 4 component files and create the old combined file instead
+        heat_dir = cityscapes_data_root / "leftImg8bit" / "train" / "cityA"
+        for suffix in ['_satg_edge.npy', '_satg_var.npy', '_satg_ent.npy', '_satg_corn.npy']:
+            (heat_dir / f"000001_000000{suffix}").unlink()
+        old_heatmap = np.random.rand(64, 64).astype(np.float32)
+        np.save(str(heat_dir / "000001_000000_satg_heatmap.npy"), old_heatmap)
+
+        dataset = CityscapesDataset(
+            root_or_cfg=str(cityscapes_data_root),
+            split="train",
+            
+        )
+        with pytest.raises(FileNotFoundError, match="satg_edge"):
+            _ = dataset[0]
+
+    def test_missing_one_component_raises(self, cityscapes_data_root):
+        """If 1 of 4 component files is missing, must raise FileNotFoundError."""
+        from data.cityscapes_loader import CityscapesDataset
+
+        heat_dir = cityscapes_data_root / "leftImg8bit" / "train" / "cityA"
+        (heat_dir / "000001_000000_satg_corn.npy").unlink()
+
+        dataset = CityscapesDataset(
+            root_or_cfg=str(cityscapes_data_root),
+            split="train",
+            
+        )
+        with pytest.raises(FileNotFoundError, match="satg_corn"):
+            _ = dataset[0]
+
+    def test_weight_override_changes_combined(self, cityscapes_data_root):
+        """Different structural_prior weights in config produce different heatmaps."""
+        from data.cityscapes_loader import CityscapesDataset
+
+        # Config with aggressive edge weight, zero others
+        cfg_edge = OmegaConf.create({
+            "structural_prior": {
+                "edge_weight": 1.0,
+                "variance_weight": 0.0,
+                "entropy_weight": 0.0,
+                "cornerness_weight": 0.0,
+            }
+        })
+        # Config with aggressive variance weight, zero others
+        cfg_var = OmegaConf.create({
+            "structural_prior": {
+                "edge_weight": 0.0,
+                "variance_weight": 1.0,
+                "entropy_weight": 0.0,
+                "cornerness_weight": 0.0,
+            }
+        })
+
+        dataset_edge = CityscapesDataset(
+            root_or_cfg=str(cityscapes_data_root),
+            split="train",
+            
+            cfg=cfg_edge,
+        )
+        dataset_var = CityscapesDataset(
+            root_or_cfg=str(cityscapes_data_root),
+            split="train",
+            
+            cfg=cfg_var,
+        )
+
+        _, hm_edge = dataset_edge[0]
+        _, hm_var = dataset_var[0]
+
+        # The two heatmaps should differ (different weights)
+        diff = (hm_edge - hm_var).abs().mean().item()
+        assert diff > 0.01, (
+            f"Expected heatmaps to differ with different cfg weights, diff={diff:.6f}"
+        )
 
 
 # =============================================================================
@@ -737,7 +816,7 @@ class TestGTA5Dataset:
         from data.gta5_loader import GTA5Dataset
 
         dataset = GTA5Dataset(
-            root=str(gta5_trainids_root),
+            root_or_cfg=str(gta5_trainids_root),
             img_subdir="images/train",
             label_subdir="labels/train",
             label_suffix="_trainids.png",
@@ -753,7 +832,7 @@ class TestGTA5Dataset:
         from data.gta5_loader import GTA5Dataset
 
         dataset = GTA5Dataset(
-            root=str(gta5_trainids_root),
+            root_or_cfg=str(gta5_trainids_root),
             img_subdir="images/train",
             label_subdir="labels/train",
             label_suffix="_trainids.png",
@@ -769,7 +848,7 @@ class TestGTA5Dataset:
         from data.gta5_loader import GTA5Dataset
 
         dataset = GTA5Dataset(
-            root=str(gta5_trainids_root),
+            root_or_cfg=str(gta5_trainids_root),
             img_subdir="images/train",
             label_subdir="labels/train",
             label_suffix="_trainids.png",
@@ -784,7 +863,7 @@ class TestGTA5Dataset:
         from data.gta5_loader import GTA5Dataset
 
         dataset = GTA5Dataset(
-            root=str(gta5_trainids_root),
+            root_or_cfg=str(gta5_trainids_root),
             img_subdir="images/train",
             label_subdir="labels/train",
             label_suffix="_trainids.png",
@@ -801,7 +880,7 @@ class TestGTA5Dataset:
         from data.gta5_loader import GTA5Dataset
 
         dataset = GTA5Dataset(
-            root=str(gta5_trainids_root),
+            root_or_cfg=str(gta5_trainids_root),
             img_subdir="images/train",
             label_subdir="labels/train",
             label_suffix="_trainids.png",
@@ -829,7 +908,7 @@ class TestGTA5Dataset:
         from data.gta5_loader import GTA5Dataset
 
         dataset = GTA5Dataset(
-            root=str(gta5_trainids_root),
+            root_or_cfg=str(gta5_trainids_root),
             img_subdir="images/train",
             label_subdir="labels/train",
             label_suffix="_trainids.png",

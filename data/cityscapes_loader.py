@@ -4,14 +4,18 @@ Supports two modes:
 - Train split: returns (image, heatmap) with precomputed structural heatmaps.
 - Val split: returns (image, label) with ground-truth labels for evaluation.
 - skip_heatmap flag allows disabling heatmap loading (baseline_mean_teacher).
+
+Construction accepts either explicit keyword arguments or an OmegaConf config
+object as the first positional argument (used by the training loop).
 """
 
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 import cv2
 import numpy as np
 import torch
+from omegaconf import OmegaConf, DictConfig
 from torch.utils.data import Dataset
 
 from data.augmentations import TargetAugment
@@ -21,39 +25,65 @@ _STD = np.array([58.395, 57.12, 57.375], dtype=np.float32)
 
 _LABEL_SUFFIX = "_gtFine_labelTrainIds.png"
 _IMG_SUFFIX = "_leftImg8bit.png"
-_HEATMAP_SUFFIX = "_satg_heatmap.npy"
+
+# Default structural-prior weights (match configs/default.yaml)
+_DEFAULT_SP_WTS = OmegaConf.create({
+    "structural_prior": {
+        "edge_weight": 0.25,
+        "variance_weight": 0.25,
+        "entropy_weight": 0.25,
+        "cornerness_weight": 0.25,
+    }
+})
 
 
 class CityscapesDataset(Dataset):
     """Cityscapes dataset for UDA training and evaluation.
 
     For the **train** split returns ``(image, heatmap)`` where heatmap
-    is a precomputed structural complexity map loaded from ``heatmap_root``,
-    or an all-ones dummy if ``skip_heatmap=True``.
+    is a structural complexity map loaded from four precomputed component
+    files (edge, var, ent, corn) and combined at load-time using config
+    weights, or an all-ones dummy if ``skip_heatmap=True``.
     For the **val** split returns ``(image, label)`` with ground-truth trainIDs.
 
     Args:
         root: Root directory of Cityscapes dataset (leftImg8bit + gtFine).
         split: ``"train"`` or ``"val"``.
-        heatmap_root: Path to directory containing precomputed .npy heatmap
+        heatmap_root: Path to directory containing precomputed .npy component
             files mirroring the leftImg8bit/train structure. Required when
             ``split="train"`` and ``skip_heatmap=False``.
         crop_size: Target (H, W). If ``None``, original image size is kept.
         augment: Whether to apply target-domain augmentation (flip + crop).
         skip_heatmap: If ``True``, return an all-ones dummy heatmap instead
             of loading from disk (used by source_only and mean_teacher baselines).
+        cfg: OmegaConf config with a ``structural_prior`` section containing
+            ``edge_weight``, ``variance_weight``, ``entropy_weight``,
+            ``cornerness_weight``.  If ``None``, defaults (0.25 each) are used.
     """
 
     def __init__(
         self,
-        root: str,
+        root_or_cfg: Union[str, OmegaConf],
         split: str = "train",
         heatmap_root: Optional[str] = None,
         crop_size: Optional[Tuple[int, int]] = None,
         augment: bool = False,
         skip_heatmap: bool = False,
+        cfg: Optional[OmegaConf] = None,
     ) -> None:
         super().__init__()
+        # Support OmegaConf DictConfig as first argument (training loop usage).
+        if isinstance(root_or_cfg, DictConfig):
+            _cfg = root_or_cfg
+            root = str(_cfg.training.target_root)
+            heatmap_root = _cfg.training.get("heatmap_root", None)
+            crop_size = tuple(_cfg.training.crop_size) if _cfg.training.crop_size is not None else None
+            augment = True
+            skip_heatmap = _cfg.training.get("skip_heatmap", False)
+            cfg = _cfg  # pass along for structural_prior weights
+        else:
+            root = root_or_cfg
+
         if split not in ("train", "val"):
             raise ValueError(f"split must be 'train' or 'val', got '{split}'")
         self.root = Path(root)
@@ -61,6 +91,12 @@ class CityscapesDataset(Dataset):
         self.crop_size = crop_size
         self.augment = augment
         self.skip_heatmap = skip_heatmap
+
+        # Heatmap combination weights
+        if cfg is not None:
+            self._sp_cfg = cfg.structural_prior
+        else:
+            self._sp_cfg = _DEFAULT_SP_WTS.structural_prior
 
         img_dir = self.root / "leftImg8bit" / split
 
@@ -104,6 +140,64 @@ class CityscapesDataset(Dataset):
         else:
             return self._get_val_item(idx)
 
+    def _load_and_combine_heatmap(self, img_path: Path) -> np.ndarray:
+        """Load 4 component heatmap files and combine using config weights.
+
+        The combination is done at load time so weights can be changed via
+        config without re-running precomputation.
+
+        Args:
+            img_path: Path to the source ``_leftImg8bit.png`` image.
+
+        Returns:
+            Combined heatmap (H, W), float32, values in [0.0, 1.0].
+        """
+        stem = img_path.name[: -len(_IMG_SUFFIX)]
+
+        # Compute base directory for heatmap files
+        if self._heatmap_root is not None:
+            rel = img_path.relative_to(img_path.parent.parent.parent)
+            heat_dir = self._heatmap_root / rel.parent.parent / rel.parent.name
+        else:
+            heat_dir = img_path.parent
+
+        # Check all 4 component files exist
+        comp_suffixes = {
+            'edge': '_satg_edge.npy',
+            'var': '_satg_var.npy',
+            'ent': '_satg_ent.npy',
+            'corn': '_satg_corn.npy',
+        }
+        missing = []
+        for suffix in comp_suffixes.values():
+            path = heat_dir / f"{stem}{suffix}"
+            if not path.exists():
+                missing.append(str(path))
+
+        if missing:
+            raise FileNotFoundError(
+                f"Missing heatmap component(s) for {img_path}.\n"
+                f"Expected: *_satg_edge.npy, *_satg_var.npy, "
+                f"*_satg_ent.npy, *_satg_corn.npy\n"
+                f"Not found:\n" + "\n".join(missing)
+            )
+
+        # Load components
+        components = {}
+        for key, suffix in comp_suffixes.items():
+            path = heat_dir / f"{stem}{suffix}"
+            components[key] = np.load(str(path)).astype(np.float32)
+
+        # Combine with config weights
+        sp = self._sp_cfg
+        H = (
+            sp.edge_weight * components['edge']
+            + sp.variance_weight * components['var']
+            + sp.entropy_weight * components['ent']
+            + sp.cornerness_weight * components['corn']
+        )
+        return np.clip(H, 0.0, 1.0).astype(np.float32)
+
     def _get_train_item(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         img_path = self._samples[idx]
 
@@ -118,24 +212,7 @@ class CityscapesDataset(Dataset):
             img_tensor = torch.from_numpy((img_rgb - _MEAN) / _STD).permute(2, 0, 1).float()
             return img_tensor, torch.zeros(1)
 
-        stem = img_path.name[: -len(_IMG_SUFFIX)]
-        rel = img_path.relative_to(
-            img_path.parent.parent.parent
-        )  # leftImg8bit/train/city/stem_leftImg8bit.png
-        if self._heatmap_root is not None:
-            heat_path = (
-                self._heatmap_root
-                / rel.parent.parent
-                / rel.parent.name
-                / f"{stem}{_HEATMAP_SUFFIX}"
-            )
-        else:
-            heat_path = img_path.with_name(f"{stem}{_HEATMAP_SUFFIX}")
-
-        if not heat_path.exists():
-            raise FileNotFoundError(f"Heatmap not found: {heat_path}")
-
-        heatmap = np.load(str(heat_path)).astype(np.float32)
+        heatmap = self._load_and_combine_heatmap(img_path)
 
         # --- Augmentation (spatial only: flip + crop) ---
         if self.augment:

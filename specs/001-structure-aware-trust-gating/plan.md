@@ -102,7 +102,7 @@ Option (b) is preferred because it enables true joint training. This adds ~4 exp
 | §2.6 Tensor Shape Comments | ✅ PASS | Shape annotations on non-obvious ops |
 | §2.7 Linting/Formatting | ✅ PASS | black + flake8 enforced |
 | §2.8 Swappable Backbones | ✅ PASS | Backbone configurable via YAML |
-| §2.9 Heatmap Naming | ✅ PASS | `{stem}_satg_heatmap.npy` convention |
+| §2.9 Heatmap Naming | ✅ PASS | `{stem}_satg_{edge,var,ent,corn}.npy` (4 files per image, combined at load time) |
 | §3.1 Mandatory Ablations | ✅ PASS | 9 ablation variants enumerated (A–G + grid + k-sensitivity) |
 | §3.2 Source Only Baseline | ✅ PASS | Lower bound always included |
 | §3.3 Dry Run Validation | ✅ PASS | 10 images, 10 iters before full runs |

@@ -227,21 +227,22 @@ Arguments:
 
 Behavior:
     1. Recursively find all *.png images under data_root
-    2. For each image: load with cv2, compute StructuralPrior.compute()
-    3. Save as {stem}_satg_heatmap.npy next to original image
+    2. For each image: load with cv2, compute StructuralPrior.compute() (returns dict of 4 components)
+    3. Save as {stem}_satg_{edge,var,ent,corn}.npy next to original image (4 files per image)
     4. Use multiprocessing.Pool with tqdm progress bar
-    5. Print statistics: min/max/mean of 20 random heatmaps
+    5. Print per-component statistics: min/max/mean of 20 random samples
 
 Output:
-    - One .npy file per input image
-    - Console output: progress bar + statistics
+    - 4 .npy files per input image: edge, var, ent, corn
+    - Console output: progress bar + per-component statistics
 ```
 
 ### Invariants
-- Deterministic output (same input → same heatmap)
-- Output naming: `{image_stem}_satg_heatmap.npy`
-- Output dtype: float32
-- Output shape: (H, W) matching input image
+- Deterministic output (same input → same heatmap components)
+- Output naming: `{image_stem}_satg_{component}.npy` (component ∈ {edge, var, ent, corn})
+- Output dtype: float32 per component file
+- Output shape: (H, W) matching input image per component file
+- Combined heatmap computed at load time via `H = w_e·edge + w_v·var + w_e·ent + w_c·corn` with config weights
 
 ---
 

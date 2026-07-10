@@ -258,11 +258,185 @@ pseudo-label errors. The entire project stood or fell on this assumption.
 - The project has NOT been implemented yet — we are in pre-implementation
   phase
 
+## 2026-07-10
+
+### Entry 16: Extended Structural Prior — Two Additional Cues Identified (MAJOR FINDING)
+
+**Source**: Deep theoretical analysis of the structural prior's failure modes
+
+**Learned**:
+The current two-cue prior (edge density + local variance) captures important
+but incomplete structural information. Two additional cues — local Shannon
+entropy and structure tensor minimum eigenvalue (cornerness) — are strongly
+motivated by both theory and the specific failure modes of GTA5→Cityscapes
+UDA.
+
+**Why 2 cues are insufficient — 3 failure modes**:
+
+1. **Occlusion boundaries**: When a pedestrian stands half-behind a pole,
+   the boundary region has gradients from TWO directions simultaneously
+   (pedestrian edge + pole edge). Edge density sees "there are edges here"
+   — correct. Local variance sees "there is intensity variation" — correct.
+   But neither captures the fact that gradients are coming from multiple
+   directions at once — the precise geometric signature of an occlusion.
+   This is exactly where the teacher assigns the wrong class and where
+   confidence is most dangerously miscalibrated.
+
+2. **Domain-shift vegetation**: GTA5 trees are geometrically simple
+   (repetitive polygon meshes). Cityscapes trees have complex, irregular
+   leaf structure with many subtle intensity gradations. Edge density is
+   moderately high in both. Local variance captures some difference. But
+   what truly separates them is the DISTRIBUTIONAL RICHNESS of intensity
+   values — Cityscapes vegetation has many distinct micro-level intensity
+   values (high entropy) whereas GTA5 vegetation has fewer distinct values
+   arranged more predictably (lower entropy). Entropy is the right tool.
+
+3. **Complex backgrounds with clean foreground**: A sign post (structurally
+   simple foreground) in front of a busy intersection (high-complexity
+   background). The local window centered on the post edge captures BOTH
+   the clean post boundary AND the chaotic background. Edge density and
+   variance average out the complexity. Multi-directional gradient
+   complexity (cornerness) specifically identifies junction zones where
+   boundaries from multiple objects overlap.
+
+**Addition 1 — Local Shannon Entropy**:
+- H_ent[p] = -Σ_b p_b * log(p_b) where p_b is the fraction of pixels in
+  a local window with intensity in bin b (e.g., 32 quantization bins)
+- Captures DISTRIBUTIONAL richness that variance cannot: variance = second
+  statistical moment (spread from mean); entropy = information content
+  (number of distinct states)
+- A 50/50 black-and-white striped patch has HIGH variance but LOW entropy
+  (only 2 states). A gradient-rich multi-textured patch has HIGH variance
+  AND HIGH entropy.
+- Implementation: `skimage.filters.rank.entropy(gray_uint8, disk(radius))`
+  — O(H*W*B), fully vectorized, ~0.3–0.8s per full-res Cityscapes image.
+
+**Addition 2 — Structure Tensor Minimum Eigenvalue (λ₂, Cornerness)**:
+- Structure tensor: J = blur(∇I ⊗ ∇I), where ∇I = (Gx, Gy) is the gradient.
+  J is a 2×2 matrix with components Jxx=blur(Gx²), Jxy=blur(Gx·Gy),
+  Jyy=blur(Gy²). λ₂ = 0.5*(Jxx+Jyy) - 0.5*sqrt((Jxx-Jyy)² + 4Jxy²)
+- λ₂ ≈ 0: either flat region (no gradient) or a clean edge (gradient all
+  in one direction). Both are structurally simple.
+- λ₂ >> 0: gradients exist in MULTIPLE DIRECTIONS in the local window.
+  This is the mathematical signature of: a corner, a junction, an occlusion
+  boundary, or chaotic multi-object texture.
+- Why uniquely valuable for UDA: Under domain shift, the teacher's
+  segmentation boundaries are most likely wrong at JUNCTIONS — where
+  multiple objects meet. These are precisely where λ₂ is highest.
+- Implementation: cv2.Sobel → elementwise products → cv2.GaussianBlur →
+  λ₂ formula. All vectorized, ~0.1s per image.
+
+### Entry 17: Separate Component File Design for Ablation Efficiency
+
+**Source**: Design analysis of precomputation architecture
+
+**Learned**:
+With 4 cues, storing a single pre-combined heatmap is inefficient for
+ablation studies. To run "edge-only" with the old design, we'd need to
+re-run precomputation with edge_weight=1.0 — 2 hours of CPU time per
+ablation type.
+
+**New design**: Store 4 separate component .npy files per image. Combine
+them at DATALOADER time using config weights.
+
+Per-image files:
+  {stem}_satg_edge.npy    — edge density [H,W] float32
+  {stem}_satg_var.npy     — local variance [H,W] float32
+  {stem}_satg_ent.npy     — local entropy [H,W] float32
+  {stem}_satg_corn.npy    — cornerness λ₂ [H,W] float32
+
+At training time:
+  H = w1*edge + w2*var + w3*ent + w4*corn    (all from config)
+  H = clip(H, 0, 1).astype(float32)
+
+Ablation benefits:
+  "edge-only":      edge_weight=1.0, others 0.0   → no re-precompute
+  "variance-only":  variance_weight=1.0, others 0.0 → no re-precompute
+  "entropy-only":   entropy_weight=1.0, others 0.0  → no re-precompute
+  "cornerness-only": cornerness_weight=1.0, others 0.0 → no re-precompute
+  "all-four equal":  all 0.25 → default
+
+Disk impact: 4× more files, each float32 [H,W] ≈ 2MB per image.
+Total: 2975 images × 4 × 2MB ≈ 24GB. Ensure data disk has space.
+
+**Constitution check**: All four cues are derived from raw RGB pixels using
+classical deterministic CV operations with no learned parameters and no
+target-domain labels. No constitutional violation.
+
+### Entry 18: Updated Combination Formula
+
+**Source**: Integration of the 4-cue prior design
+
+**Learned**:
+The new combination formula:
+  H = w1*edge_density + w2*local_variance + w3*local_entropy + w4*cornerness
+with w1 + w2 + w3 + w4 = 1 (enforced by design; default all 0.25)
+
+The structural_prior config section must be extended with:
+  entropy_kernel_size: 15      # disk radius for entropy
+  entropy_bins: 32             # quantization bins
+  cornerness_kernel_size: 15   # Gaussian window for structure tensor
+  cornerness_sigma: 2.0        # Gaussian sigma for structure tensor
+  entropy_weight: 0.25
+  cornerness_weight: 0.25
+  edge_weight: 0.25            # was 0.5, now redistributed
+  variance_weight: 0.25        # was 0.5, now redistributed
+
+The trust_gate config and all downstream modules (HardTrustGate,
+SoftWeightTrustGate, TemperatureSoftLabel) are UNCHANGED — they consume
+the final combined heatmap H, which remains in [0,1].
+
+---
+
+## 2026-07-10
+
+### Entry 10: Structural Prior — Dead Components Debugging & Fix
+
+**Source**: Running `verify_components` after heatmap precomputation
+
+**Problem**: 3 of 4 structural prior components (edge, var, corn) had near-zero means (< 0.02), making the combined heatmap ≈ entropy alone. The trust gate would have no useful structural signal.
+
+**Root causes**:
+1. **Edge (Canny)**: Thresholds of 50/150 found only 0.6% of pixels as edges on Cityscapes (2048×1024). Urban scenes have large uniform regions (sky, road) and the Canny hysteresis was too aggressive.
+2. **Variance & Cornerness (min-max normalization)**: Outlier pixels (sharp edges, lane markings) with values 100× the median stretched the normalization range to near-zero for 95% of pixels.
+
+**Fix applied**:
+- **Edge**: Replaced Canny with Sobel gradient magnitude (continuous) + p95 percentile normalization. No thresholds to tune, mean went 0.006 → 0.26.
+- **Variance & Cornerness**: Replaced min-max normalization with `_percentile_normalize(arr, pct=95.0)` — clips at 95th percentile then divides by that value. Variance mean 0.02 → 0.14, cornerness mean 0.004 → 0.14.
+- Config updated: removed `edge_low_threshold`/`edge_high_threshold`, added `norm_percentile: 95.0`.
+
+**Files changed**:
+- `satg/structural_prior.py` — `compute()`, new `_percentile_normalize()` helper
+- `configs/default.yaml` — config schema update
+- `precompute/compute_heatmaps.py` — `_default_cfg()` update, `--resume` flag, disk space check
+
+**Verification** (post-fix):
+| Component | Pre-fix mean | Post-fix mean | Target range |
+|-----------|-------------|--------------|--------------|
+| edge      | 0.006       | 0.26         | [0.05, 0.50] |
+| var       | 0.02        | 0.14         | [0.05, 0.50] |
+| ent       | 0.49        | 0.56         | [0.20, 0.80] |
+| corn      | 0.004       | 0.14         | [0.05, 0.50] |
+
+No component below 0.02 or above 0.95. File count 11,900 = 2,975 × 4.
+
+**Trade-off to track**: Components are now more correlated (edge-var 0.92) than before (0.71). This is because gradient magnitude and variance both rise near edges — they naturally co-vary. The old low correlations were just measuring near-zero signal. This is the correct fix; correlation is not a problem by itself.
+
+**When to revisit coefficients** — come back to tune if any of these happen during training:
+
+1. Validation mIoU plateaus well below expectation.
+2. The trust gate becomes too strict or too loose.
+3. One component clearly dominates the others in gate behavior.
+4. Ablations show a simpler weighting scheme wins consistently.
+
+If that happens, tune in this order: **weights first** → **norm_percentile** → **component definitions** (last resort). Recomputation without a training signal is expensive and unlikely to be useful.
+
 ## Quality Notes
 
 - This log captures everything that was learned during the exploration,
   analysis, and diagnostic test phases
-- Entries are ordered chronologically within the single day (July 8, 2026)
+- Entries are ordered chronologically; later entries supersede earlier findings
+  where the implementation diverged from the spec
 - Sources are tagged where relevant
 - Claims are distinguished from interpretations where possible
 - Open questions and uncertainties are explicitly noted

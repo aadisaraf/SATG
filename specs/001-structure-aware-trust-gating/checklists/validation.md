@@ -25,12 +25,12 @@
 - [x] CHK012 - Are the input/output types and value ranges for the structural prior specified? **PASS** — Spec §FR-001: "per-pixel structural complexity heatmaps from RGB images... values in [0.0, 1.0]"; Spec §Key Entities: "float32 map [H,W]" [Completeness, Spec §FR-001]
 - [X] CHK013 - Are kernel sizes and filter parameters for edge detection specified? **PASS** — Spec §FR-001 specifies σ=2.0, Canny thresholds 50/150, variance window 15×15. Config keys: gaussian_sigma, edge_low_threshold, edge_high_threshold, edge_kernel_size, variance_kernel_size. [Resolved, Spec §FR-001]
 - [X] CHK014 - Is the normalization method for the combined heatmap specified? **PASS** — Spec §FR-001 specifies min-max normalization: H_norm = (H - H_min) / (H_max - H_min + 1e-6). [Resolved, Spec §FR-001]
-- [x] CHK015 - Is the offline precomputation pipeline (script name, output format, naming convention) described? **PASS** — Spec §FR-005: ".npy files with deterministic naming convention"; Constitution §2.9: "{image_stem}_satg_heatmap.npy" [Completeness, Spec §FR-005]
+- [x] CHK015 - Is the offline precomputation pipeline (script name, output format, naming convention) described? **PASS** — Spec §FR-005: ".npy files with deterministic naming convention"; Constitution §2.9: "{image_stem}_satg_{edge,var,ent,corn}.npy" (4 files per image) [Completeness, Spec §FR-005]
 - [x] CHK016 - Is the augmentation consistency requirement (heatmap augmented same as image) specified? **PASS** — Spec §FR-007: "apply augmentation transforms consistently to both target images and their corresponding heatmaps" [Completeness, Spec §FR-007]
 - [x] CHK017 - Are the configurable weights w₁ and w₂ documented with valid ranges? **PASS** — Spec §FR-001: "w₁+w₂=1 (default w₁=w₂=0.5, both configurable)" [Clarity, Spec §FR-001]
 - [x] CHK018 - Is the deterministic nature of the structural prior (no learned parameters) explicitly stated? **PASS** — Spec §FR-001: "using only classical computer vision operations"; Constitution §1.5: "MUST be computed solely from raw RGB pixel values using classical, deterministic computer vision operations" [Completeness, Spec §FR-001]
 - [x] CHK019 - Are the performance constraints (precomputation time, runtime overhead) quantified? **PASS** — Spec §User Story 1: "completes in under 2 hours"; Spec §FR-006: "less than 5ms overhead per image" [Measurability, Spec §User Story 1]
-- [x] CHK020 - Is the file format (.npy) and naming convention for heatmaps specified? **PASS** — Spec §FR-005: ".npy files"; Constitution §2.9: "{image_stem}_satg_heatmap.npy" [Completeness, Spec §FR-005]
+- [x] CHK020 - Is the file format (.npy) and naming convention for heatmaps specified? **PASS** — Spec §FR-005: ".npy files"; Constitution §2.9: "{image_stem}_satg_{edge,var,ent,corn}.npy" [Completeness, Spec §FR-005]
 
 ## Domain 3: Trust Gating Completeness
 

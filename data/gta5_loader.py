@@ -2,14 +2,20 @@
 
 Loads synthetic GTA5 images and their preprocessed 19-class index-map labels.
 Applies source-domain augmentation (spatial + colour jitter).
+
+Construction accepts either explicit keyword arguments or an OmegaConf config
+object as the first positional argument (used by the training loop).
 """
 
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
+
+import hashlib
 
 import cv2
 import numpy as np
 import torch
+from omegaconf import OmegaConf, DictConfig
 from torch.utils.data import Dataset
 
 from data.augmentations import SourceAugment
@@ -41,13 +47,22 @@ class GTA5Dataset(Dataset):
 
     def __init__(
         self,
-        root: str,
-        img_subdir: str = "images/train",
-        label_subdir: str = "labels/train",
+        root_or_cfg: Union[str, OmegaConf],
+        img_subdir: str = "images",
+        label_subdir: str = "labels",
         crop_size: Optional[Tuple[int, int]] = None,
         augment: bool = False,
         label_suffix: str = "",
     ) -> None:
+        # Support OmegaConf DictConfig as first argument (training loop usage).
+        if isinstance(root_or_cfg, DictConfig):
+            cfg = root_or_cfg
+            root = str(cfg.training.source_root)
+            crop_size = tuple(cfg.training.crop_size) if cfg.training.crop_size is not None else None
+            augment = True
+            label_suffix = cfg.training.get("label_suffix", "_trainids.png")
+        else:
+            root = root_or_cfg
         super().__init__()
         self.root = Path(root)
         self.img_dir = self.root / img_subdir
@@ -79,7 +94,7 @@ class GTA5Dataset(Dataset):
     def rare_class_weights(self) -> torch.Tensor:
         """Inverse-frequency rare-class weights, shape ``(19,)``, clipped ``[0.1, 10.0]``.
 
-        Computed lazily on first access.  Formula per class *c*:
+        Computed lazily on first access and cached to ``/tmp``.  Formula per class *c*:
 
             weight[c] = N / (count[c] * 19)
 
@@ -87,6 +102,12 @@ class GTA5Dataset(Dataset):
         *count[c]* is the per-class pixel count, clipped to ``[0.1, 10.0]``.
         """
         if self._rare_class_weights is not None:
+            return self._rare_class_weights
+
+        cache_key = hashlib.md5(str(self.root.resolve()).encode()).hexdigest()
+        cache_path = Path(f"/tmp/satg_rare_weights_{cache_key}.pt")
+        if cache_path.exists():
+            self._rare_class_weights = torch.load(cache_path, weights_only=True)
             return self._rare_class_weights
 
         counts = torch.zeros(19, dtype=torch.float64)
@@ -109,6 +130,9 @@ class GTA5Dataset(Dataset):
         )
         weights = weights.clamp(0.1, 10.0).float()
         self._rare_class_weights = weights
+
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(self._rare_class_weights, cache_path)
         return weights
 
     def __len__(self) -> int:

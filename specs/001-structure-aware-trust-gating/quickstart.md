@@ -20,15 +20,15 @@ pip install -r requirements.txt
 ```bash
 # Compute heatmaps for all Cityscapes training images
 python -m precompute.compute_heatmaps \
-    --data_root /data/cityscapes/leftImg8bit/train \
+    --data_root /Users/aadisaraf/Documents/research/SATG/data/cityscapes/leftImg8bit/train \
     --num_workers 8
 ```
 
-**Expected output**: One `*_satg_heatmap.npy` file per image, plus console statistics (min/max/mean).
+**Expected output**: 4 `.npy` files per image (`{stem}_satg_edge.npy`, `_var.npy`, `_ent.npy`, `_corn.npy`), plus console per-component statistics (min/max/mean).
 
-**Validation**: Check that heatmaps exist alongside images:
+**Validation**: Check that all 4 component files exist alongside images:
 ```bash
-ls /data/cityscapes/leftImg8bit/train/*/*_satg_heatmap.npy | wc -l
+ls /Users/aadisaraf/Documents/research/SATG/data/cityscapes/leftImg8bit/train/*/*_satg_edge.npy | wc -l
 # Should return 2975
 ```
 

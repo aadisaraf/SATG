@@ -35,8 +35,9 @@
       # If it stalls, just re-run — it resumes where it left off.
 
     OUTPUT:
-      data/GTA5/images/  — 24,966 RGB PNGs (1914×1052)
-      data/GTA5/labels/  — 24,966 indexed PNGs (label IDs 0-34)
+data/GTA5/images/  — 24,966 RGB PNGs (1914×1052)
+data/GTA5/labels/  — 24,966 indexed PNGs (label IDs 0-34)
+# Note: data/GTA5 is relative to the project root (SATG/data/GTA5)
 #>
 
 param(

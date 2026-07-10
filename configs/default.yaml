@@ -28,13 +28,18 @@ ema:
 # Structural Prior
 # --------------------------------
 structural_prior:
-  edge_low_threshold: 50
-  edge_high_threshold: 150
+  norm_percentile: 95.0
   gaussian_sigma: 2.0
   edge_kernel_size: 15
   variance_kernel_size: 15
-  edge_weight: 0.5
-  variance_weight: 0.5
+  edge_weight: 0.25
+  variance_weight: 0.25
+  entropy_kernel_radius: 7
+  entropy_n_bins: 32
+  entropy_weight: 0.25
+  cornerness_kernel_size: 15
+  cornerness_sigma: 2.0
+  cornerness_weight: 0.25
 
 # --------------------------------
 # Trust Gate
@@ -55,9 +60,9 @@ trust_gate:
 training:
   source: gta5
   target: cityscapes
-  source_root: /data/GTA5
-  target_root: /data/cityscapes
-  heatmap_root: /data/cityscapes
+  source_root: ./data/GTA5
+  target_root: ./data/cityscapes
+  heatmap_root: null
   crop_size: [512, 512]
   batch_size: 4
   num_workers: 4
@@ -72,6 +77,9 @@ training:
   weight_decay: 5.0e-4
   use_amp: false
   skip_heatmap: false
+  label_suffix: _trainids.png
+  gradient_clip_norm: 5.0
+  cudnn_benchmark: false
 
 # --------------------------------
 # Checkpoint

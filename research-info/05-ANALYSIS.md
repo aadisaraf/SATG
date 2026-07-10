@@ -87,32 +87,94 @@ per-image-min-max statistics.
 ## 2. Critique of the Structural Prior
 
 ### Strengths
-- Computationally free (~5–10 ms per image)
-- Interpretable (edges + texture = structural complexity)
+- Computationally free (~0.5–1.0 s per image for all 4 cues)
+- Interpretable (edges + texture + distributional richness + multi-directional gradients)
 - Model-agnostic (same prior works for any architecture)
 - Per-image normalisation adapts automatically to different image types
+- Four cues capture complementary aspects of structural complexity —
+  the combination is more robust than any two-cue subset
+- Separate component storage enables zero-cost ablations
+
+### Why the Original Two-Cue Prior Was Insufficient
+
+The original prior (Canny edge density + local variance) captured important
+but incomplete structural information. Three specific failure modes motivated
+the extension to four cues:
+
+**Failure 1 — Occlusion Boundaries**:
+A pedestrian half-behind a pole. The boundary region has gradients from TWO
+directions simultaneously (pedestrian edge + pole edge). Edge density sees
+"there are edges here" — correct. Local variance sees "there is intensity
+variation" — correct. But neither captures the FACT that gradients are
+coming from multiple directions at once, which is the precise geometric
+signature of an occlusion. Cornerness ($\lambda_2$) specifically identifies
+multi-directional gradient fields.
+
+**Failure 2 — Domain-Shift Vegetation**:
+GTA5 trees are geometrically simple (repetitive polygon meshes). Cityscapes
+trees have complex, irregular leaf structure with many subtle intensity
+gradations. Edge density is moderately high in both. Local variance captures
+some difference. But what truly separates them is the DISTRIBUTIONAL RICHNESS
+of intensity values — Cityscapes vegetation has many distinct micro-level
+intensity values (high entropy) whereas GTA5 vegetation has fewer distinct
+values arranged more predictably (lower entropy). Entropy is the right tool.
+
+**Failure 3 — Complex Backgrounds with Clean Foreground**:
+A sign post (structurally simple foreground) in front of a busy intersection
+(high-complexity background). The local window centered on the post edge
+captures BOTH the clean post boundary AND the chaotic background. Edge
+density and variance average out the complexity. But multi-directional
+gradient complexity (cornerness) specifically identifies the junction zones
+where boundaries from multiple objects overlap, even at pixel-level
+precision.
+
+**Variance vs. Entropy — The Key Distinction**:
+- Variance = second statistical moment = spread from mean.
+- Entropy = information content = number of distinct states.
+- A 50/50 black-and-white striped patch has HIGH variance but LOW entropy
+  (only two states). A gradient-rich multi-textured patch has HIGH variance
+  AND HIGH entropy.
+- For Cityscapes: the transition between vegetation and sky, or between
+  building textures and road surface, produces the exact multi-state
+  intensity distribution that entropy captures and variance underestimates.
+
+**Edge Density vs. Cornerness — The Key Distinction**:
+- Edge density counts how many edges exist in a window (binary count).
+- Cornerness ($\lambda_2$) specifically identifies where edges from
+  DIFFERENT directions intersect — the most dangerous locations for
+  pseudo-label errors.
+- Harris (1988) used $\lambda_2$ as a corner detector: it is the classical
+  measure of multi-directional gradient complexity.
 
 ### Weaknesses
 - Canny binary edge map introduces a hard split at $S = 0.5$ — complexity
-  is not a smooth measure
+  is not a smooth measure across the edge/non-edge boundary
+- Entropy entropy computation is ~300–800 ms per image (skimage) — the
+  bottleneck of the 4-cue pipeline
 - Per-image normalisation limits cross-image comparisons
-- Two fixed parameters (Canny thresholds, Gaussian kernel size) — may need
-  tuning for different datasets
-- Only captures edges and local texture — misses global structure
+- Four tunable parameters (Canny thresholds, Gaussian kernel sizes,
+  entropy radius, cornerness sigma) — configuration space is larger
+- All four cues operate at the pixel level — misses global structure
   (layout, perspective, object relationships)
-- 5×5 Gaussian window is small; may miss mid-range texture patterns
+- Skimage entropy depends on `disk` structural element which assumes
+  isotropic neighbourhoods; anisotropic scenes (e.g., long horizon lines)
+  may be better served by rectangular windows
+- 24 GB storage for 4 separate components (vs. 6 GB for single heatmap)
 
-### Potential Improvements
-1. **Multi-scale variance**: Use multiple Gaussian kernel sizes (3×3, 7×7,
-   15×15) and aggregate
+### Potential Improvements (Deferred)
+1. **Multi-scale cues**: Compute each cue at multiple scales and aggregate
 2. **Gradient magnitude instead of Canny**: Replace binary edge with
-   continuous Sobel magnitude
+   continuous Sobel magnitude — avoids the hard split at S=0.5
 3. **Superpixel-based complexity**: Compute complexity over superpixel
    regions rather than per-pixel
 4. **Learned prior**: Train a small network to predict complexity from
-   the input image
+   the input image — only after evaluating the 4-cue classical prior
 5. **Global normalisation**: Normalise the prior over the entire dataset
    or a held-out reference set
+6. **Anisotropic entropy**: Replace `disk` with `rectangle` structural
+   elements for direction-aware entropy
+7. **Orientation-aware cornerness**: Decompose cornerness into
+   principal orientations for finer-grained junction analysis
 
 ## 3. Effect Size Analysis
 

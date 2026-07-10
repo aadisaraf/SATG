@@ -6,16 +6,22 @@ value is the GTA5 class index (0–32). This script converts them to Cityscapes
 and saves the result as ``{stem}_trainids.png`` alongside the original file.
 
 Usage::
-    python precompute/preprocess_gta5_labels.py --label_root /data/GTA5/labels
+    python -m precompute.preprocess_gta5_labels --label_root /Users/aadisaraf/Documents/research/SATG/data/GTA5/labels
 """
 
 import argparse
 import multiprocessing
+import sys
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
 from tqdm import tqdm
+
+# Ensure project root is on sys.path (works when invoked both as `-m` and directly)
+_project_root = Path(__file__).resolve().parent.parent
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
 
 from data.label_mapping import GTA5_TO_CITYSCAPES_19
 

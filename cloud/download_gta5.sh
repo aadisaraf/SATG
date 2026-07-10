@@ -19,8 +19,8 @@
 #   tail -f gta5_download.log
 #
 #   # Quick count check:
-#   echo "images: $(ls data/GTA5/images/*.png 2>/dev/null | wc -l) / 24966"
-#   echo "labels: $(ls data/GTA5/labels/*.png 2>/dev/null | wc -l) / 24966"
+#   echo "images: $(ls /Users/aadisaraf/Documents/research/SATG/data/GTA5/images/*.png 2>/dev/null | wc -l) / 24966"
+#   echo "labels: $(ls /Users/aadisaraf/Documents/research/SATG/data/GTA5/labels/*.png 2>/dev/null | wc -l) / 24966"
 #
 #   # If it stalls, just re-run — it resumes where it left off.
 #
