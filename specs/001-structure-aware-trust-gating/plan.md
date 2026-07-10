@@ -6,7 +6,9 @@
 
 ## Summary
 
-SATG is a UDA semantic segmentation method that augments standard teacher-student pseudo-labeling with an image-space structural prior. The structural prior (edge density + local variance) identifies structurally complex regions where the teacher is likely overconfident about wrong predictions. A trust gate modulates pseudo-label weights based on both teacher confidence and structural complexity, reducing confirmation bias in complex regions. The system uses DeepLabV3+ ResNet50 with EMA teacher updates, trained on GTA5→Cityscapes with 19-class Cityscapes label space.
+SATG is a UDA semantic segmentation method that augments standard teacher-student pseudo-labeling with an image-space structural prior. **The primary contribution is soft pseudo-label modulation** — temperature-scaled soft targets (Soft-Label) and continuous trust weighting (Soft-Weight) — rather than binary hard rejection. The structural prior (edge density + local variance) identifies regions where the teacher is likely overconfident, and soft modulation gracefully reduces supervision signal strength in these regions rather than discarding pseudo-labels entirely. The system uses DeepLabV3+ ResNet50 with EMA teacher updates, trained on GTA5→Cityscapes with 19-class Cityscapes label space.
+
+**Why soft modulation is primary**: Hard rejection discards useful information at threshold boundaries and creates unstable training dynamics. Soft modulation preserves partial supervision from structurally complex regions, enabling the student to learn from imperfect-but-informative pseudo-labels. This is a stronger scientific contribution because it tests whether *graceful degradation* of supervision is more effective than *binary filtering*.
 
 ## Technical Context
 
@@ -35,6 +37,44 @@ SATG is a UDA semantic segmentation method that augments standard teacher-studen
 **Constraints**: ≤16GB VRAM; batch_size=1 (1 source + 1 target per GPU); 512×512 crops; no custom CUDA kernels
 
 **Scale/Scope**: 24,966 source images (GTA5), 2,975 target training + 500 val (Cityscapes); 40k training iterations
+
+**Storage Considerations**: Precomputed heatmaps for 2,975 Cityscapes images at 2048×1024 float32 = ~24GB. Mitigation: store as float16 (halves to ~12GB) or use memory-mapped loading. Heatmaps are computed once and reused across all experiments.
+
+## Critical Risk Assessment
+
+### Risk 1: Structural Complexity / Class Frequency Confounding
+
+The spec claims structural confirmation bias is "orthogonal" to standard confirmation bias (addressed by DAFormer's Rare Class Sampling). However, the structurally complex classes (pole, fence, traffic sign, rider) are also the rare classes that DAFormer targets. This creates a confound: improvements attributed to structural complexity might actually come from implicitly handling class frequency.
+
+**Mitigation**: 
+- Ablation F (Soft mechanism comparison) must include per-class IoU breakdowns
+- Report per-class trust coverage to detect class bias in trusted pixels
+- Explicitly discuss whether structural complexity and class frequency are truly independent signals
+
+### Risk 2: Hypothesis Validation Required
+
+The core assumption — that structural complexity correlates with pseudo-label error — is plausible but not guaranteed. The domain gap (GTA5→Cityscapes) is primarily about appearance (synthetic vs. real textures), not structural complexity. A structurally simple region (sky) might have high pseudo-label error due to appearance mismatch, while a structurally complex region (building facade) might be correctly classified.
+
+**Mitigation**: Before full implementation, the training pipeline must log structural complexity vs. pseudo-label error correlation metrics. This data validates or invalidates the core hypothesis without requiring a separate diagnostic test.
+
+### Risk 3: Statistical Power with 3 Seeds
+
+With 3 seeds and typical UDA variance (~2-3 mIoU std), detecting a 1 mIoU improvement requires ~50 seeds for 80% power at p<0.05. With only 3 seeds, the experiment is severely underpowered for modest improvements.
+
+**Mitigation**:
+- Acknowledge that improvements <0.5 mIoU are marginal per constitution §1.8
+- For key experiments (SATG Hard vs. Soft-Label vs. Mean Teacher), increase to 5 seeds {42, 1337, 2024, 7, 99}
+- Report confidence intervals alongside mean±std
+
+### Risk 4: Missing Combination Experiments
+
+The spec claims SATG is complementary to DAFormer/MIC/HRDA, but the experiments only compare against Standard Mean Teacher. Without testing SATG+DAFormer > DAFormer, the complementarity claim is unsubstantiated.
+
+**Mitigation**: Add combination experiments in Phase 9: SATG Soft-Label applied on top of DAFormer-trained model. This requires either:
+- (a) Loading a DAFormer checkpoint and continuing training with SATG, or
+- (b) Implementing DAFormer's Rare Class Sampling within the SATG training loop
+
+Option (b) is preferred because it enables true joint training. This adds ~4 experiments (DAFormer baseline + SATG+DAFormer × 2 seeds).
 
 ## Constitution Check
 
@@ -156,7 +196,9 @@ satg-project/
 
 ## Module Specifications
 
-### satg/soft_label.py: TemperatureSoftLabel class
+### satg/soft_label.py: TemperatureSoftLabel class (PRIMARY CONTRIBUTION)
+
+This is the primary module of SATG. It implements temperature-scaled soft pseudo-labels that gracefully degrade supervision signal strength in structurally complex regions.
 
 - `__init__(cfg: OmegaConf)`: reads `k` (default 4.0), `T_max` (default 5.0), `tau_conf` (shared with hard gate, for the pre-filter)
 - `compute_temperature(struct: Tensor[B,H,W]) -> Tensor[B,H,W]`: T = 1.0 + k * struct, then clamp to [1.0, T_max]
@@ -166,6 +208,8 @@ satg-project/
   3. Apply softmax over class dim → soft_targets [B,C,H,W]
   4. Return soft_targets (each pixel's C-vector sums to 1.0)
 - `compute_confidence_mask(teacher_logits: Tensor[B,C,H,W], tau_conf: float) -> Tensor[B,H,W]`: reuse the SAME confidence computation as the existing hard trust gate (max softmax prob > tau_conf), used as a binary pre-filter before the distributional loss is applied
+
+**Why this is primary**: Soft-label modulation preserves partial supervision from structurally complex regions. The student learns "this is probably class X, but I'm uncertain" rather than receiving either a hard label or no label at all. This enables graceful degradation rather than binary filtering.
 
 ### satg/losses.py: SoftLabelKLLoss class (nn.Module), alongside existing SATGLoss
 
@@ -178,6 +222,14 @@ satg-project/
   4. If `confidence_mask.sum() == 0`: return `torch.tensor(0.0)`
   5. Else: return `masked_kl.sum() / confidence_mask.sum()`
 - Safety: eps=1e-8 added inside log to avoid log(0); no NaN/Inf under any input including confidence_mask=all-zero
+
+### satg/trust_gate.py: HardTrustGate, SoftTrustGate (SECONDARY)
+
+Hard and soft trust gates are secondary mechanisms. Hard rejection is the simplest baseline; soft weighting provides continuous trust scores.
+
+### satg/structural_prior.py: StructuralPrior (FOUNDATION)
+
+The structural prior is the foundation that all trust mechanisms depend on. It must be validated before any trust mechanism can be tested.
 
 ## Config Schema
 
@@ -192,22 +244,91 @@ trust_gate:
   soft_label_t_max: 5.0           # temperature cap
 ```
 
+## Hypothesis Validation Framework
+
+Before full training runs, the system must validate the core hypothesis through in-training metrics:
+
+### Correlation Tracking
+
+During training, for each batch:
+1. Compute per-pixel pseudo-label error: `error = (pseudo_label != ground_truth_for_source_equivalent)` — since we don't have target ground truth, use the proxy: compute teacher confidence vs. student prediction disagreement as a proxy for unreliability
+2. Compute per-pixel structural heatmap value
+3. Log Pearson correlation coefficient between structural heatmap and prediction disagreement
+4. If correlation is weak (<0.1) or negative, the hypothesis is invalidated
+
+### Per-Class Trust Coverage Analysis
+
+For each of the 19 Cityscapes classes:
+1. Compute fraction of pixels belonging to that class that are trusted
+2. Flag any class with <10% or >90% mean coverage as potential bias
+3. Report in EXPERIMENTS.md alongside per-class IoU
+
+### Structural Complexity Distribution Analysis
+
+Log histograms of:
+1. Structural heatmap values for trusted pixels
+2. Structural heatmap values for rejected pixels
+3. Teacher confidence for trusted vs. rejected pixels
+
+These distributions reveal whether the trust gate is making meaningful distinctions.
+
+## Combination Experiments (Phase 9 Extension)
+
+To validate the complementarity claim (SATG + DAFormer > DAFormer), add:
+
+### DAFormer Rare Class Sampling Integration
+
+Implement Rare Class Sampling as a config option:
+```yaml
+data:
+  rare_class_sampling: true  # Enable inverse frequency weighting for source batches
+  class_frequencies: [0.36, 0.05, 0.19, 0.01, 0.01, 0.01, 0.01, 0.01, 0.11, 0.01, 0.05, 0.01, 0.01, 0.10, 0.01, 0.01, 0.00, 0.01, 0.01]
+```
+
+### Combination Experiments
+
+| Experiment | Config | Purpose |
+|-----------|--------|---------|
+| DAFormer baseline | `configs/baseline_daformer.yaml` | Establish DAFormer performance |
+| SATG Soft-Label + DAFormer | `configs/satg_soft_label_daformer.yaml` | Test complementarity |
+| SATG Soft-Weight + DAFormer | `configs/satg_soft_weight_daformer.yaml` | Test complementarity |
+
+These experiments require either:
+- (a) Loading a DAFormer checkpoint and continuing with SATG training, or
+- (b) Implementing Rare Class Sampling within the SATG training loop (preferred)
+
+Option (b) enables true joint training and is the recommended approach.
+
 ## Training Flow
 
+The training flow prioritizes soft-label modulation as the primary mechanism. Hard rejection is the simplest baseline; soft weighting is an intermediate; soft-label is the full contribution.
+
 ```python
-if cfg.trust_gate.type == "hard":
-    trust_weights = hard_gate.compute_mask(confidence, tgt_heatmaps)
-    target_loss = satg_loss(tgt_student_logits, pseudo_labels, trust_weights)
-
-elif cfg.trust_gate.type == "soft_weight":
-    trust_weights = soft_weight_gate.compute_weights(confidence, tgt_heatmaps)
-    target_loss = satg_loss(tgt_student_logits, pseudo_labels, trust_weights)
-
-elif cfg.trust_gate.type == "soft_label":
+# PRIMARY: Soft-label modulation (temperature-scaled pseudo-labels)
+if cfg.trust_gate.type == "soft_label":
     soft_targets = soft_label_module.compute_soft_targets(
                        tgt_teacher_logits, tgt_heatmaps)
     confidence_mask = soft_label_module.compute_confidence_mask(
                        tgt_teacher_logits, cfg.trust_gate.tau_conf)
     target_loss = soft_label_kl_loss(tgt_student_logits, soft_targets,
                                       confidence_mask)
+
+# SECONDARY: Soft-weight modulation (continuous trust weights)
+elif cfg.trust_gate.type == "soft_weight":
+    trust_weights = soft_weight_gate.compute_weights(confidence, tgt_heatmaps)
+    target_loss = satg_loss(tgt_student_logits, pseudo_labels, trust_weights)
+
+# BASELINE: Hard rejection (binary mask)
+elif cfg.trust_gate.type == "hard":
+    trust_weights = hard_gate.compute_mask(confidence, tgt_heatmaps)
+    target_loss = satg_loss(tgt_student_logits, pseudo_labels, trust_weights)
 ```
+
+### Hypothesis Validation During Training
+
+To validate the core hypothesis (structural complexity correlates with pseudo-label error), the training loop must log:
+1. Per-batch correlation between structural heatmap values and pseudo-label error rates
+2. Per-class trust coverage ratios (detect class bias)
+3. Distribution of structural complexity values across trusted vs. rejected pixels
+
+These metrics are logged to WandB and analyzed post-training to validate or invalidate the core assumption.

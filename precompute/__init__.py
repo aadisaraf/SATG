@@ -1,0 +1,1 @@
+"""Offline structural heatmap precomputation."""

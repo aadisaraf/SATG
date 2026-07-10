@@ -1,0 +1,10 @@
+[run]
+source = satg, models, data, training, evaluation
+
+[report]
+fail_under = 80
+show_missing = true
+skip_empty = true
+
+[html]
+directory = coverage_html

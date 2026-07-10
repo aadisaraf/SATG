@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.coverage
+.pytest_cache/
+
+# Session/task tracking
+.specify/sessions/
+.omo/run-continuation/
+
+# Knowledge graph cache
+graphify-out/cache/
+
+# Datasets — downloaded/acquired, not source code
+data/
+cityscapes_data/
+
+# Dataset downloads / logs
+*.zip
+gta5_download.log
