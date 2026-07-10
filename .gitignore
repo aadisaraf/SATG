@@ -11,3 +11,11 @@ __pycache__/
 
 # Knowledge graph cache
 graphify-out/cache/
+
+# Datasets — downloaded/acquired, not source code
+data/
+cityscapes_data/
+
+# Dataset downloads / logs
+*.zip
+gta5_download.log

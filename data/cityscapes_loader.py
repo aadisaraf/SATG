@@ -19,7 +19,7 @@ from data.augmentations import TargetAugment
 _MEAN = np.array([123.675, 116.28, 103.53], dtype=np.float32)
 _STD = np.array([58.395, 57.12, 57.375], dtype=np.float32)
 
-_LABEL_SUFFIX = "_gtFine_labelIds.png"
+_LABEL_SUFFIX = "_gtFine_labelTrainIds.png"
 _IMG_SUFFIX = "_leftImg8bit.png"
 _HEATMAP_SUFFIX = "_satg_heatmap.npy"
 

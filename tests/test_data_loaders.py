@@ -305,9 +305,9 @@ def cityscapes_data_root():
             train/cityB/cityB_000001_leftImg8bit.png
             val/cityC/cityC_000001_leftImg8bit.png
           gtFine/
-            train/cityA/cityA_000001_gtFine_labelIds.png
-            train/cityB/cityB_000001_gtFine_labelIds.png
-            val/cityC/cityC_000001_gtFine_labelIds.png
+            train/cityA/cityA_000001_gtFine_labelTrainIds.png
+            train/cityB/cityB_000001_gtFine_labelTrainIds.png
+            val/cityC/cityC_000001_gtFine_labelTrainIds.png
           heatmaps/ (mirrors leftImg8bit/train structure with .npy files)
     """
     with tempfile.TemporaryDirectory() as tmp:
@@ -334,7 +334,7 @@ def cityscapes_data_root():
                 cv2.imwrite(str(img_dir / f"{stem}_leftImg8bit.png"), img)
                 # label values in 0..18 ∪ {255}
                 label = np.random.choice(list(range(19)) + [255], (64, 64)).astype(np.uint8)
-                cv2.imwrite(str(lbl_dir / f"{stem}_gtFine_labelIds.png"), label)
+                cv2.imwrite(str(lbl_dir / f"{stem}_gtFine_labelTrainIds.png"), label)
                 # heatmap .npy
                 heatmap = np.random.rand(64, 64).astype(np.float32)
                 np.save(str(heat_dir / f"{stem}_satg_heatmap.npy"), heatmap)
@@ -349,7 +349,7 @@ def cityscapes_data_root():
                 img = np.random.randint(0, 256, (64, 64, 3), dtype=np.uint8)
                 cv2.imwrite(str(img_dir / f"{stem}_leftImg8bit.png"), img)
                 label = np.random.choice(list(range(19)) + [255], (64, 64)).astype(np.uint8)
-                cv2.imwrite(str(lbl_dir / f"{stem}_gtFine_labelIds.png"), label)
+                cv2.imwrite(str(lbl_dir / f"{stem}_gtFine_labelTrainIds.png"), label)
 
         yield root
 
