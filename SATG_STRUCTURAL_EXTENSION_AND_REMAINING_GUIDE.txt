@@ -1,0 +1,1235 @@
+================================================================================
+SATG — STRUCTURAL PRIOR EXTENSION + COMPLETE REMAINING GUIDE
+Run this BEFORE precomputation. All remaining commands included.
+================================================================================
+
+LEGEND:
+  [CLAUDE CODE]  — Paste into Claude Code
+  [CPU TERMINAL] — Run yourself, no GPU
+  [GPU TERMINAL] — Run yourself on A100
+  [HUMAN CHECK]  — Hard stop, verify before continuing
+
+
+================================================================================
+PART 1 — DEEP REASONING: ARE THE CURRENT STRUCTURAL CUES SUFFICIENT?
+================================================================================
+
+SHORT ANSWER: No. The current two-cue prior (edge density + local variance)
+captures important but incomplete structural information. Two additional cues —
+local entropy and structure tensor cornerness — are strongly motivated by
+both theory and the specific failure modes of GTA5→Cityscapes UDA.
+Adding them NOW, before precomputation, costs nothing extra in compute time
+since the heatmaps haven't been generated yet.
+
+─────────────────────────────────────────────────────────────────────────────
+WHAT THE CURRENT PRIOR CAPTURES
+─────────────────────────────────────────────────────────────────────────────
+
+EDGE DENSITY (Canny):
+  Measures WHERE edges are — the COUNT of edge pixels in a local window.
+  Strength: identifies regions with many object boundaries.
+  Weakness: Canny is binary. A crisp, clear road-edge and a fuzzy,
+  ambiguous occlusion boundary both register as "edge present."
+  Also: misses the DIRECTION of edges entirely.
+
+LOCAL VARIANCE:
+  Measures HOW MUCH intensity varies in a local patch.
+  Strength: captures textural complexity, rough surfaces, cluttered appearance.
+  Weakness: variance is a second-moment statistic. It captures the SPREAD of
+  intensity values but not their DISTRIBUTION. Two regions — one with 10 evenly
+  distributed intensity values and one with values concentrated at two extremes —
+  can have identical variance but very different structural complexity.
+
+─────────────────────────────────────────────────────────────────────────────
+WHY THESE TWO CUES ARE INSUFFICIENT
+─────────────────────────────────────────────────────────────────────────────
+
+FAILURE CASE 1 — OCCLUSION BOUNDARIES:
+  A pedestrian half-behind a pole. The boundary region has gradients from
+  TWO directions simultaneously (the pedestrian edge + the pole edge).
+  Edge density sees "there are edges here" — correct. Local variance sees
+  "there is intensity variation" — correct. But neither captures the FACT
+  that gradients are coming from multiple directions at once, which is the
+  precise geometric signature of an occlusion. This is exactly the location
+  where the teacher will assign the wrong class, and where the teacher's
+  confidence is most dangerously miscalibrated.
+
+FAILURE CASE 2 — DOMAIN-SHIFT VEGETATION:
+  GTA5 trees are geometrically simple (repetitive polygon meshes).
+  Cityscapes trees have complex, irregular leaf structure with many subtle
+  intensity gradations. Edge density is moderately high in both. Local
+  variance captures some difference. But what truly separates them is the
+  DISTRIBUTIONAL RICHNESS of intensity values — Cityscapes vegetation has
+  many distinct micro-level intensity values (high entropy) whereas GTA5
+  vegetation has fewer distinct values arranged more predictably (lower
+  entropy). Entropy is the right tool here.
+
+FAILURE CASE 3 — COMPLEX BACKGROUNDS WITH CLEAN FOREGROUND:
+  A sign post (structurally simple foreground) in front of a busy
+  intersection (high-complexity background). The local window centered on
+  the post edge captures BOTH the clean post boundary AND the chaotic
+  background. Edge density and variance average out the complexity.
+  But multi-directional gradient complexity (cornerness) specifically
+  identifies the junction zones where boundaries from multiple objects
+  overlap, even at pixel-level precision.
+
+─────────────────────────────────────────────────────────────────────────────
+THE TWO ADDITIONS AND THEIR PRECISE RATIONALE
+─────────────────────────────────────────────────────────────────────────────
+
+ADDITION 1 — LOCAL SHANNON ENTROPY:
+
+  Definition: H_ent[p] = -Σ_b p_b * log(p_b)
+  where p_b is the fraction of pixels in a local window with intensity
+  in bin b (using, e.g., 32 quantization bins).
+
+  What it captures that variance CANNOT:
+    - Variance = second statistical moment = spread from mean.
+    - Entropy = information content = number of distinct states.
+    - A 50/50 black-and-white striped patch has HIGH variance but
+      LOW entropy (only two states). A gradient-rich, multi-textured
+      patch has HIGH variance AND HIGH entropy.
+    - For Cityscapes: the transition between vegetation and sky, or
+      between building textures and road surface, produces the exact
+      multi-state intensity distribution that entropy captures and
+      variance underestimates.
+
+  Where it matters most in GTA5→Cityscapes:
+    - Vegetation (complex real-world texture vs. uniform synthetic)
+    - Mixed-material backgrounds (building+vegetation+sign together)
+    - Horizon zones where multiple semantic classes blend
+
+  Implementation: skimage.filters.rank.entropy(gray_uint8, disk(radius))
+    This is O(H*W*B) where B = number of bins, fully vectorized in skimage.
+    Approximately 0.3–0.8 seconds per full-resolution Cityscapes image.
+
+ADDITION 2 — STRUCTURE TENSOR MINIMUM EIGENVALUE (λ₂, CORNERNESS):
+
+  Definition: The structure tensor at each pixel is J = blur(∇I ⊗ ∇I),
+  where ∇I = (Gx, Gy) is the image gradient. J is a 2×2 matrix with
+  components Jxx=blur(Gx²), Jxy=blur(Gx·Gy), Jyy=blur(Gy²).
+  The minimum eigenvalue λ₂ = 0.5*(Jxx+Jyy) - 0.5*sqrt((Jxx-Jyy)² + 4Jxy²)
+
+  What it captures that edge density CANNOT:
+    - λ₂ ≈ 0: either a flat region (no gradient) or a clean edge
+      (gradient all in one direction). Both are structurally simple.
+    - λ₂ >> 0: gradients exist in MULTIPLE DIRECTIONS in the local window.
+      This is the mathematical signature of: a corner, a junction between
+      two boundaries, an occlusion boundary, or chaotic multi-object texture.
+    - Edge density counts how many edges exist. λ₂ specifically identifies
+      where edges from DIFFERENT directions intersect — the most dangerous
+      locations for pseudo-label errors.
+
+  Why this is uniquely valuable for UDA:
+    - Under domain shift, the teacher's segmentation boundaries are most
+      likely wrong at JUNCTIONS — where multiple objects meet. These are
+      precisely where λ₂ is highest.
+    - A clean road edge (λ₂ ≈ 0): teacher probably correct here.
+    - A pedestrian in front of a building (λ₂ >> 0): teacher is navigating
+      a multi-directional gradient field and is most likely to error.
+    - Harris (1988) used λ₂ as a corner detector for exactly this reason:
+      it is the classical measure of multi-directional gradient complexity.
+
+  Implementation: cv2.Sobel for gradients → elementwise products →
+  cv2.GaussianBlur → λ₂ formula. All vectorized. Very fast (~0.1s per image).
+
+─────────────────────────────────────────────────────────────────────────────
+CRITICAL DESIGN CHANGE: SEPARATE COMPONENT FILES
+─────────────────────────────────────────────────────────────────────────────
+
+With 4 cues, storing a single pre-combined heatmap is inefficient for ablation:
+to run "edge-only", we'd need to re-run precomputation with edge_weight=1.0.
+That's 2 hours of CPU time per ablation type.
+
+BETTER DESIGN: Store 4 separate component .npy files per image.
+Combine them at DATALOADER time using the weights in the current config.
+
+  Per-image files saved to disk:
+    {stem}_satg_edge.npy       — edge density [H,W] float32
+    {stem}_satg_var.npy        — local variance [H,W] float32
+    {stem}_satg_ent.npy        — local entropy [H,W] float32
+    {stem}_satg_corn.npy       — cornerness λ₂ [H,W] float32
+
+  At training time, CityscapesDataset does:
+    H = w1*edge + w2*var + w3*ent + w4*corn     (all from config)
+    H = clip(H, 0, 1).astype(float32)
+
+  Effect on ablations:
+    Ablation "edge-only": edge_weight=1.0, all others 0.0 → no re-precompute
+    Ablation "variance-only": variance_weight=1.0, all others 0.0 → same
+    Ablation "entropy-only": entropy_weight=1.0, all others 0.0 → same
+    Ablation "cornerness-only": cornerness_weight=1.0, all others 0.0 → same
+    Ablation "all-four equal": all 0.25 → same (default)
+
+  Disk impact: 4× more files, but each is a float32 [H,W] ≈ 2MB per image.
+  Total: 2975 images × 4 × 2MB ≈ 24GB. Ensure your data disk has space.
+
+─────────────────────────────────────────────────────────────────────────────
+UPDATED COMBINATION FORMULA AND CONFIG
+─────────────────────────────────────────────────────────────────────────────
+
+  H = w1*edge_density + w2*local_variance + w3*local_entropy + w4*cornerness
+  with w1 + w2 + w3 + w4 = 1 (enforced by design; default: all 0.25)
+
+  The constitution's constraint is satisfied: all four cues are derived from
+  raw RGB pixels using classical deterministic CV operations with no learned
+  parameters and no target-domain labels.
+
+─────────────────────────────────────────────────────────────────────────────
+WHAT WE ARE NOT ADDING AND WHY
+─────────────────────────────────────────────────────────────────────────────
+
+GRADIENT MAGNITUDE (Sobel continuous):
+  Not added. Information is already largely captured by Canny edge density +
+  cornerness (cornerness USES Sobel gradients internally). Adding it would
+  create correlated features and muddle the ablation story.
+
+GLCM TEXTURE FEATURES:
+  Not added. Computationally expensive (O(H*W*K²*levels)) and their
+  information content is largely subsumed by local entropy. Would add
+  significant complexity for marginal gain.
+
+MULTI-SCALE EDGE DENSITY:
+  Not added. The 4-cue combination already provides multi-faceted structural
+  information. Adding scale as a dimension increases the parameter count and
+  makes ablations much more expensive.
+
+CHROMINANCE VARIANCE / COLOR ENTROPY:
+  Not added in this iteration. Worth noting as future work in the paper.
+  Grayscale-based cues are sufficient for the claim; color adds complexity.
+
+MONOCULAR DEPTH DISCONTINUITIES:
+  Not added. Requires a learned model. Constitution violation (Section 1.5).
+
+
+================================================================================
+PART 2 — AMENDMENT: STRUCTURAL PRIOR EXTENSION
+Run BEFORE precomputation. Fresh Claude Code session.
+[CLAUDE CODE]
+================================================================================
+
+PASTE THIS ENTIRE BLOCK INTO CLAUDE CODE:
+──────────────────────────────────────────────────────────────────────
+
+We are amending the structural prior before running heatmap precomputation.
+Do NOT run precomputation yet. Write code and tests first, then we verify.
+
+Read these existing files fully before writing any code:
+  satg/structural_prior.py
+  precompute/compute_heatmaps.py
+  data/cityscapes_loader.py
+  tests/test_structural_prior.py
+  tests/test_data_loaders.py
+  configs/default.yaml
+
+After reading, confirm with one line per file. Then implement the following.
+
+────────────────────────────────────────
+CHANGE 1 — configs/default.yaml
+────────────────────────────────────────
+
+In the structural_prior section, make these changes:
+  - Change edge_weight: 0.5  →  0.25
+  - Change variance_weight: 0.5  →  0.25
+  - ADD these new keys:
+      entropy_kernel_radius: 7
+      entropy_n_bins: 32
+      entropy_weight: 0.25
+      cornerness_kernel_size: 15
+      cornerness_sigma: 2.0
+      cornerness_weight: 0.25
+
+Final structural_prior section must look exactly like:
+  structural_prior:
+    edge_low_threshold: 50
+    edge_high_threshold: 150
+    gaussian_sigma: 2.0
+    edge_kernel_size: 15
+    variance_kernel_size: 15
+    edge_weight: 0.25
+    variance_weight: 0.25
+    entropy_kernel_radius: 7
+    entropy_n_bins: 32
+    entropy_weight: 0.25
+    cornerness_kernel_size: 15
+    cornerness_sigma: 2.0
+    cornerness_weight: 0.25
+
+────────────────────────────────────────
+CHANGE 2 — satg/structural_prior.py
+────────────────────────────────────────
+
+Read the existing implementation fully. Then make these changes:
+
+ADD two new private methods to StructuralPrior:
+
+Method 1: _local_entropy(self, gray: np.ndarray) -> np.ndarray
+  """
+  Compute local Shannon entropy over a disk-shaped neighborhood.
+  Uses skimage.filters.rank.entropy for efficient histogram-based computation.
+
+  Args:
+    gray: float32 [H, W] grayscale image, values in [0.0, 1.0]
+  Returns:
+    entropy_map: float32 [H, W], normalized to [0.0, 1.0]
+  """
+  Implementation:
+    from skimage.filters.rank import entropy as rank_entropy
+    from skimage.morphology import disk
+    # rank_entropy requires uint8 input
+    gray_uint8 = (gray * 255).clip(0, 255).astype(np.uint8)
+    radius = self.cfg.structural_prior.entropy_kernel_radius   # default 7
+    ent_map = rank_entropy(gray_uint8, disk(radius)).astype(np.float64)
+    # rank_entropy output is in bits [0, log2(n_possible_values)]
+    # normalize to [0, 1]
+    ent_map = (ent_map - ent_map.min()) / (ent_map.max() - ent_map.min() + 1e-8)
+    return ent_map.astype(np.float32)
+
+Method 2: _structure_tensor_cornerness(self, gray: np.ndarray) -> np.ndarray
+  """
+  Compute minimum eigenvalue (λ₂) of the structure tensor at each pixel.
+  High λ₂ indicates gradients from multiple directions simultaneously —
+  the signature of occlusion boundaries, object junctions, and complex
+  multi-object regions where pseudo-labels are most unreliable.
+
+  Args:
+    gray: float32 [H, W] grayscale image, values in [0.0, 1.0]
+  Returns:
+    cornerness: float32 [H, W], normalized to [0.0, 1.0]
+  """
+  Implementation:
+    gray_f64 = gray.astype(np.float64)
+    # Gradient computation
+    Gx = cv2.Sobel(gray_f64, cv2.CV_64F, 1, 0, ksize=3)
+    Gy = cv2.Sobel(gray_f64, cv2.CV_64F, 0, 1, ksize=3)
+    # Structure tensor components (smoothed outer products)
+    sigma = self.cfg.structural_prior.cornerness_sigma    # default 2.0
+    ksize = self.cfg.structural_prior.cornerness_kernel_size  # default 15
+    Jxx = cv2.GaussianBlur(Gx * Gx, (ksize, ksize), sigma)
+    Jxy = cv2.GaussianBlur(Gx * Gy, (ksize, ksize), sigma)
+    Jyy = cv2.GaussianBlur(Gy * Gy, (ksize, ksize), sigma)
+    # Minimum eigenvalue: λ₂ = 0.5*(Jxx+Jyy) - 0.5*sqrt((Jxx-Jyy)²+4*Jxy²)
+    trace = Jxx + Jyy
+    discriminant = np.sqrt((Jxx - Jyy) ** 2 + 4.0 * Jxy ** 2 + 1e-12)
+    lambda2 = 0.5 * (trace - discriminant)
+    lambda2 = np.clip(lambda2, 0.0, None)   # λ₂ ≥ 0 by definition
+    # Normalize
+    lambda2_norm = (lambda2 - lambda2.min()) / (lambda2.max() - lambda2.min() + 1e-8)
+    return lambda2_norm.astype(np.float32)
+
+CHANGE the existing compute() method signature and return type:
+  OLD: compute(image_rgb: np.ndarray) -> np.ndarray
+       Returns combined heatmap [H, W] float32
+
+  NEW: compute(image_rgb: np.ndarray) -> dict
+       Returns dict with keys:
+         'edge': np.ndarray [H, W] float32
+         'var':  np.ndarray [H, W] float32
+         'ent':  np.ndarray [H, W] float32
+         'corn': np.ndarray [H, W] float32
+         'combined': np.ndarray [H, W] float32  ← weighted sum of all four
+
+  Implementation of new compute():
+    1. Convert RGB → grayscale (same as before)
+    2. Compute edge_density (same as before) → stored as 'edge'
+    3. Compute local_variance (same as before) → stored as 'var'
+    4. Compute self._local_entropy(gray) → stored as 'ent'
+    5. Compute self._structure_tensor_cornerness(gray) → stored as 'corn'
+    6. Compute combined:
+         combined = (
+             cfg.structural_prior.edge_weight * edge +
+             cfg.structural_prior.variance_weight * var_map +
+             cfg.structural_prior.entropy_weight * ent +
+             cfg.structural_prior.cornerness_weight * corn
+         )
+         combined = np.clip(combined, 0.0, 1.0).astype(np.float32)
+    7. Return {'edge': edge, 'var': var_map, 'ent': ent, 'corn': corn,
+               'combined': combined}
+
+ADD a helper for backward compatibility (may be used in tests):
+  def compute_combined(self, image_rgb: np.ndarray) -> np.ndarray:
+    """Returns only the combined heatmap [H, W] for callers that don't
+    need individual components."""
+    return self.compute(image_rgb)['combined']
+
+UPDATE batch_compute() to call compute() and return list of dicts.
+
+────────────────────────────────────────
+CHANGE 3 — precompute/compute_heatmaps.py
+────────────────────────────────────────
+
+Read the existing script. Then update it so that for EACH image it saves
+FOUR separate .npy files instead of one.
+
+New file naming convention (same directory as source image):
+  {stem}_satg_edge.npy    — edge density component
+  {stem}_satg_var.npy     — local variance component
+  {stem}_satg_ent.npy     — local entropy component
+  {stem}_satg_corn.npy    — structure tensor cornerness component
+
+Remove the old {stem}_satg_heatmap.npy output entirely.
+
+Updated worker function:
+  def process_image(args):
+    img_path, cfg = args
+    img = cv2.imread(str(img_path))
+    if img is None:
+        return False
+    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    prior = StructuralPrior(cfg)
+    components = prior.compute(img_rgb)   # now returns dict
+    stem = img_path.with_suffix('')       # remove .png extension
+    np.save(str(stem) + '_satg_edge.npy', components['edge'])
+    np.save(str(stem) + '_satg_var.npy',  components['var'])
+    np.save(str(stem) + '_satg_ent.npy',  components['ent'])
+    np.save(str(stem) + '_satg_corn.npy', components['corn'])
+    return True
+
+After completion, update the statistics report to show per-component stats:
+  Load 20 random images' edge, var, ent, corn maps and print:
+    edge:  min/max/mean
+    var:   min/max/mean
+    ent:   min/max/mean
+    corn:  min/max/mean
+    combined (weighted): mean
+  This verifies each component is in a reasonable range independently.
+
+Add a verify_components(data_root) function:
+  Loads 50 random sets of 4 component files.
+  Asserts: all values in [0, 1] for all components.
+  Warns if any component has mean < 0.02 (likely all zeros).
+  Warns if any component has mean > 0.95 (likely normalization failure).
+  Prints correlation between each pair of components (to confirm they are
+  NOT redundant — we want moderate correlation, not near 1.0).
+
+────────────────────────────────────────
+CHANGE 4 — data/cityscapes_loader.py
+────────────────────────────────────────
+
+Read the existing loader. Change the heatmap loading from ONE file to FOUR
+files that are combined with config weights.
+
+Replace the existing heatmap loading logic with:
+
+  def _load_and_combine_heatmap(self, img_path: Path) -> np.ndarray:
+    """
+    Loads 4 component heatmap files and combines them using config weights.
+    The combination is done at load time so weights can be changed via config
+    without re-running precomputation.
+    """
+    stem = img_path.with_suffix('')
+    edge = np.load(str(stem) + '_satg_edge.npy').astype(np.float32)
+    var  = np.load(str(stem) + '_satg_var.npy').astype(np.float32)
+    ent  = np.load(str(stem) + '_satg_ent.npy').astype(np.float32)
+    corn = np.load(str(stem) + '_satg_corn.npy').astype(np.float32)
+    sp = self.cfg.structural_prior
+    H = (sp.edge_weight * edge + sp.variance_weight * var +
+         sp.entropy_weight * ent + sp.cornerness_weight * corn)
+    return np.clip(H, 0.0, 1.0).astype(np.float32)
+
+Update the FileNotFoundError handling:
+  If ANY of the 4 files is missing, raise a FileNotFoundError with a
+  message listing all 4 expected paths so the user knows what's missing.
+  Example:
+    FileNotFoundError: "Missing heatmap component(s) for {img_path}.
+    Expected: *_satg_edge.npy, *_satg_var.npy, *_satg_ent.npy, *_satg_corn.npy"
+
+────────────────────────────────────────
+CHANGE 5 — tests/test_structural_prior.py
+────────────────────────────────────────
+
+Read the existing tests. Make these changes:
+
+UPDATE existing tests that expect compute() to return np.ndarray:
+  They now call compute()['combined'] or compute_combined().
+
+ADD these new tests:
+
+test_compute_returns_dict:
+  result = prior.compute(tiny_rgb)
+  assert isinstance(result, dict)
+  assert set(result.keys()) == {'edge', 'var', 'ent', 'corn', 'combined'}
+
+test_all_components_float32:
+  for key in ['edge', 'var', 'ent', 'corn', 'combined']:
+    assert result[key].dtype == np.float32
+
+test_all_components_in_range:
+  for key in ['edge', 'var', 'ent', 'corn', 'combined']:
+    assert result[key].min() >= 0.0 and result[key].max() <= 1.0
+
+test_entropy_flat_image_low:
+  # A completely uniform image has zero entropy
+  flat = np.full((64, 64, 3), 128, dtype=np.uint8)
+  result = prior.compute(flat)
+  assert result['ent'].mean() < 0.1
+
+test_entropy_noisy_image_high:
+  # A random noise image has maximum entropy
+  noisy = np.random.randint(0, 255, (64, 64, 3), dtype=np.uint8)
+  result = prior.compute(noisy)
+  assert result['ent'].mean() > 0.5
+
+test_cornerness_flat_region_low:
+  # A completely uniform image has no gradients → λ₂ ≈ 0
+  flat = np.full((64, 64, 3), 128, dtype=np.uint8)
+  result = prior.compute(flat)
+  assert result['corn'].mean() < 0.05
+
+test_cornerness_corner_high:
+  # An image with a corner (gradients in two directions) has high λ₂
+  img = np.zeros((64, 64, 3), dtype=np.uint8)
+  img[:32, :32] = 255   # top-left quadrant white → creates corner at center
+  result = prior.compute(img)
+  # The center pixel (corner junction) should have high cornerness
+  center_val = result['corn'][28:36, 28:36].mean()
+  assert center_val > 0.3
+
+test_combined_is_weighted_sum:
+  # With equal weights (0.25 each), combined = 0.25*e + 0.25*v + 0.25*ent + 0.25*c
+  result = prior.compute(tiny_rgb_image)
+  expected = 0.25 * (result['edge'] + result['var'] + result['ent'] + result['corn'])
+  expected = np.clip(expected, 0, 1)
+  np.testing.assert_allclose(result['combined'], expected, atol=1e-5)
+
+test_components_not_identical:
+  # Edge density and cornerness should not be perfectly correlated
+  result = prior.compute(tiny_rgb_image)
+  corr = np.corrcoef(result['edge'].flatten(), result['corn'].flatten())[0, 1]
+  assert abs(corr) < 0.98, f"Edge and cornerness are too correlated: {corr:.3f}"
+
+────────────────────────────────────────
+CHANGE 6 — tests/test_data_loaders.py
+────────────────────────────────────────
+
+Update the conftest.py or the existing heatmap test fixtures:
+  The fixture that creates a fake *_satg_heatmap.npy file must now create
+  FOUR files instead:
+    {tmpdir}/{stem}_satg_edge.npy
+    {tmpdir}/{stem}_satg_var.npy
+    {tmpdir}/{stem}_satg_ent.npy
+    {tmpdir}/{stem}_satg_corn.npy
+  Each should be a random float32 array in [0, 1] of appropriate [H, W].
+
+UPDATE test_heatmap_loaded_from_npy:
+  If only the combined file exists (not the 4 components), the loader should
+  raise FileNotFoundError. Verify this with an explicit test.
+
+ADD test_missing_one_component_raises:
+  If 3 of the 4 component files exist but one is missing, the loader must
+  raise FileNotFoundError (not silently succeed).
+
+ADD test_weight_override_changes_combined:
+  Load the same image twice with different structural_prior weights in config.
+  Confirm that the returned heatmap tensor differs between the two calls.
+
+────────────────────────────────────────
+AFTER ALL CHANGES ARE MADE:
+────────────────────────────────────────
+
+Run:
+  pytest tests/test_structural_prior.py tests/test_data_loaders.py \
+         -v --tb=short
+
+Show full output. Fix all failures before I proceed.
+Confirm coverage ≥ 80% for satg/structural_prior.py and data/cityscapes_loader.py:
+  pytest --cov=satg.structural_prior --cov=data.cityscapes_loader \
+         --cov-report=term-missing \
+         tests/test_structural_prior.py tests/test_data_loaders.py
+
+──────────────────────────────────────────────────────────────────────
+
+[HUMAN CHECK] after Claude Code finishes:
+  python -c "
+  from satg.structural_prior import StructuralPrior
+  import numpy as np
+  from omegaconf import OmegaConf
+  cfg = OmegaConf.load('configs/default.yaml')
+  prior = StructuralPrior(cfg)
+  test_img = np.random.randint(0, 255, (128, 128, 3), dtype=np.uint8)
+  result = prior.compute(test_img)
+  for k, v in result.items():
+      print(f'{k}: shape={v.shape}, dtype={v.dtype}, min={v.min():.3f}, max={v.max():.3f}')
+  print('ALL OK')
+  "
+  All 5 keys (edge, var, ent, corn, combined) must print with dtype=float32,
+  min≥0, max≤1, shape=(128,128).
+  If any component shows max=0.000: that component has a bug. Report to Claude Code.
+
+
+================================================================================
+PART 3 — ALL REMAINING COMMANDS (Complete, ordered, start-to-finish)
+================================================================================
+
+After the amendment and human check above pass, run everything below in order.
+
+─────────────────────────────────────────────────────────────────────────────
+STEP 1 — GTA5 Label Preprocessing
+[CPU TERMINAL] — Run once before any training
+─────────────────────────────────────────────────────────────────────────────
+
+  python precompute/preprocess_gta5_labels.py --label_root /data/GTA5/labels
+
+  # Spot-check one output
+  python -c "
+  import numpy as np
+  from PIL import Image
+  arr = np.array(Image.open('/data/GTA5/labels/00001_trainids.png'))
+  print('dtype:', arr.dtype)
+  print('shape:', arr.shape)
+  print('unique values:', sorted(set(arr.flatten().tolist())))
+  "
+
+[HUMAN CHECK]:
+  dtype must be uint8
+  shape must be (H, W) — NOT (H, W, 3)
+  ALL values must be in {0, 1, ..., 18, 255} with NOTHING else
+  If you see values like 3, 22, 26 that are outside 0-18 range:
+    the GTA5 index→trainID mapping has a bug. Paste output to Claude Code.
+
+─────────────────────────────────────────────────────────────────────────────
+STEP 2 — Heatmap Precomputation (4 components per image)
+[CPU TERMINAL]
+─────────────────────────────────────────────────────────────────────────────
+
+  # Test on one city first (should take ~2-5 minutes)
+  python precompute/compute_heatmaps.py \
+    --data_root /data/cityscapes/leftImg8bit/train/aachen --num_workers 4
+
+  # Verify the 4 files were created (not the old single file)
+  ls /data/cityscapes/leftImg8bit/train/aachen/ | grep satg | head -8
+  # Should see: *_satg_edge.npy *_satg_var.npy *_satg_ent.npy *_satg_corn.npy
+  # Should NOT see: *_satg_heatmap.npy (old format)
+
+  # Check that the stats look reasonable for each component
+  # (This is printed by compute_heatmaps.py automatically after completion)
+
+  # If test passes, run on all cities (~1-2 hours with 8 workers)
+  python precompute/compute_heatmaps.py \
+    --data_root /data/cityscapes/leftImg8bit/train --num_workers 8
+
+  # Verify total file count (should be 2975 × 4 = 11900 .npy files)
+  find /data/cityscapes/leftImg8bit/train -name "*_satg_*.npy" | wc -l
+  # Expected: 11900
+
+  # Run component verification
+  python -c "
+  from precompute.compute_heatmaps import verify_components
+  verify_components('/data/cityscapes/leftImg8bit/train')
+  "
+
+[HUMAN CHECK]:
+  File count must be 11900 (= 2975 × 4)
+  Per-component stats from the script output:
+    edge: mean should be in [0.05, 0.50]
+    var:  mean should be in [0.05, 0.50]
+    ent:  mean should be in [0.20, 0.80]  (entropy tends to be higher)
+    corn: mean should be in [0.05, 0.50]
+  No component should have mean < 0.02 (likely all zeros) or > 0.95
+
+─────────────────────────────────────────────────────────────────────────────
+STEP 3 — Training Loop + Evaluation Pipeline
+[CLAUDE CODE] — fresh session
+─────────────────────────────────────────────────────────────────────────────
+
+PASTE:
+──────────────────────────────────────────────────────────────────────
+
+/speckit.implement
+
+Read tasks.md. Confirm Phases 0-4 complete and all Phase 2 amendments done.
+Read plan.md TRAINING FLOW section and configs/default.yaml.
+We are implementing PHASE 5 (training/trainer.py) and PHASE 6 (evaluation/evaluator.py).
+
+NOTE: CityscapesDataset already loads and combines 4 component heatmaps
+internally and returns a single [B,H,W] tensor to the training loop.
+The trainer receives a single combined heatmap — no changes to the training
+loop are needed to support the 4-component system.
+
+PHASE 5 — training/trainer.py
+
+Exact imports at top:
+  import argparse
+  import csv
+  import itertools
+  import random
+  from pathlib import Path
+
+  import numpy as np
+  import torch
+  import torch.nn as nn
+  import torch.nn.functional as F
+  import wandb
+  from omegaconf import OmegaConf
+  from torch.utils.data import DataLoader
+
+  from data.gta5_loader import GTA5Dataset
+  from data.cityscapes_loader import CityscapesDataset
+  from evaluation.evaluator import compute_miou
+  from models.segmentation import SegmentationModel
+  from models.ema import EMAModel
+  from satg.trust_gate import HardTrustGate, SoftWeightTrustGate
+  from satg.soft_label import TemperatureSoftLabel
+  from satg.losses import SATGLoss, SoftLabelKLLoss
+
+Argument parsing (FIRST in main()):
+  parser = argparse.ArgumentParser()
+  parser.add_argument('--config', required=True, type=str)
+  parser.add_argument('overrides', nargs='*')
+  args = parser.parse_args()
+
+Config loading:
+  base_cfg = OmegaConf.load('configs/default.yaml')
+  variant_cfg = OmegaConf.load(args.config)
+  cfg = OmegaConf.merge(base_cfg, variant_cfg)
+  if args.overrides:
+      cfg = OmegaConf.merge(cfg, OmegaConf.from_dotlist(args.overrides))
+
+Seeds:
+  torch.manual_seed(cfg.seed)
+  torch.cuda.manual_seed_all(cfg.seed)
+  np.random.seed(cfg.seed)
+  random.seed(cfg.seed)
+  torch.backends.cudnn.deterministic = True
+  torch.backends.cudnn.benchmark = False
+
+Logging and checkpoint setup:
+  run_name = f"{Path(args.config).stem}_seed{cfg.seed}"
+  save_dir = Path(cfg.checkpoint.save_dir) / run_name
+  save_dir.mkdir(parents=True, exist_ok=True)
+  OmegaConf.save(cfg, save_dir / 'config.yaml')
+
+  if cfg.logging.backend == 'wandb':
+      wandb.init(project=cfg.logging.project, name=run_name,
+                 config=OmegaConf.to_container(cfg, resolve=True))
+  else:
+      from torch.utils.tensorboard import SummaryWriter
+      tb_writer = SummaryWriter(log_dir=str(save_dir / 'tb_logs'))
+
+  csv_path = save_dir / 'metrics.csv'
+  csv_file = open(csv_path, 'w', newline='')
+  csv_writer = csv.DictWriter(csv_file, fieldnames=[
+      'iteration','total_loss','source_loss','target_loss',
+      'trust_coverage_ratio','mean_temperature','lr','val_miou'
+  ])
+  csv_writer.writeheader()
+
+Device and models:
+  device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+  student = SegmentationModel(cfg).to(device)
+  ema = EMAModel(student, cfg.ema.momentum)
+  ema.model = ema.model.to(device)
+
+Trust gate initialization (three-way):
+  if cfg.trust_gate.type == 'hard':
+      hard_gate = HardTrustGate(cfg)
+      satg_loss = SATGLoss()
+  elif cfg.trust_gate.type == 'soft_weight':
+      soft_weight_gate = SoftWeightTrustGate(cfg)
+      satg_loss = SATGLoss()
+  elif cfg.trust_gate.type == 'soft_label':
+      soft_label_mod = TemperatureSoftLabel(cfg)
+      soft_label_kl_loss = SoftLabelKLLoss()
+
+Optimizer:
+  backbone_params = [p for n,p in student.named_parameters() if 'backbone' in n]
+  head_params     = [p for n,p in student.named_parameters() if 'backbone' not in n]
+  optimizer = torch.optim.SGD(
+      [{'params': backbone_params, 'lr': cfg.training.lr * cfg.model.backbone_lr_multiplier},
+       {'params': head_params,     'lr': cfg.training.lr}],
+      momentum=cfg.training.optimizer_momentum,
+      weight_decay=cfg.training.weight_decay
+  )
+  scheduler = torch.optim.lr_scheduler.PolynomialLR(
+      optimizer, total_iters=cfg.training.iterations, power=cfg.training.poly_power
+  )
+
+Datasets and loaders:
+  source_dataset = GTA5Dataset(cfg)
+  target_dataset = CityscapesDataset(cfg, split='train')
+  val_dataset    = CityscapesDataset(cfg, split='val')
+  source_loader  = DataLoader(source_dataset, batch_size=cfg.training.batch_size,
+                              shuffle=True, num_workers=cfg.training.num_workers,
+                              drop_last=True)
+  target_loader  = DataLoader(target_dataset, batch_size=cfg.training.batch_size,
+                              shuffle=True, num_workers=cfg.training.num_workers,
+                              drop_last=True)
+  val_loader     = DataLoader(val_dataset, batch_size=1, shuffle=False,
+                              num_workers=cfg.training.num_workers)
+
+  source_iter = iter(source_loader)
+  def next_source():
+      nonlocal source_iter
+      try:
+          return next(source_iter)
+      except StopIteration:
+          source_iter = iter(source_loader)
+          return next(source_iter)
+
+  if cfg.training.get('skip_heatmap', False):
+      target_iter = itertools.cycle(iter(target_loader))
+  else:
+      target_iter = itertools.cycle(iter(target_loader))
+
+Source criterion with rare class sampling:
+  if cfg.training.rare_class_sampling:
+      class_weights = source_dataset.class_weights.to(device)
+      source_criterion = nn.CrossEntropyLoss(weight=class_weights, ignore_index=255)
+  else:
+      source_criterion = nn.CrossEntropyLoss(ignore_index=255)
+
+Training loop:
+  best_miou = 0.0
+  mean_temp = 0.0
+
+  for iteration in range(cfg.training.iterations):
+
+    student.train()
+    src_imgs, src_labels = next_source()
+    src_imgs = src_imgs.to(device); src_labels = src_labels.to(device)
+    src_main, src_aux = student(src_imgs)
+    h, w = src_labels.shape[-2:]
+    src_main = F.interpolate(src_main, (h,w), mode='bilinear', align_corners=False)
+    src_aux  = F.interpolate(src_aux,  (h,w), mode='bilinear', align_corners=False)
+    source_loss = (source_criterion(src_main, src_labels) +
+                   cfg.training.aux_loss_weight * source_criterion(src_aux, src_labels))
+
+    tgt_imgs, tgt_heatmaps = next(target_iter)
+    tgt_imgs = tgt_imgs.to(device)
+    tgt_heatmaps = tgt_heatmaps.to(device)   # [B,H,W] combined heatmap
+
+    with torch.no_grad():
+        tgt_t_main, _ = ema.model(tgt_imgs)
+        tgt_h, tgt_w = tgt_heatmaps.shape[-2:]
+        tgt_teacher_logits = F.interpolate(tgt_t_main, (tgt_h,tgt_w),
+                                           mode='bilinear', align_corners=False)
+        tgt_probs    = F.softmax(tgt_teacher_logits, dim=1)
+        confidence   = tgt_probs.max(dim=1).values
+        pseudo_labels = tgt_probs.argmax(dim=1)
+
+    tgt_s_main, _ = student(tgt_imgs)
+    tgt_student_logits = F.interpolate(tgt_s_main, (tgt_h,tgt_w),
+                                       mode='bilinear', align_corners=False)
+
+    if cfg.trust_gate.type == 'hard':
+        tw = hard_gate.compute_mask(confidence, tgt_heatmaps)
+        target_loss = satg_loss(tgt_student_logits, pseudo_labels, tw)
+        trust_coverage = tw.mean().item()
+
+    elif cfg.trust_gate.type == 'soft_weight':
+        tw = soft_weight_gate.compute_weights(confidence, tgt_heatmaps)
+        target_loss = satg_loss(tgt_student_logits, pseudo_labels, tw)
+        trust_coverage = tw.mean().item()
+
+    elif cfg.trust_gate.type == 'soft_label':
+        st = soft_label_mod.compute_soft_targets(tgt_teacher_logits, tgt_heatmaps)
+        cm = soft_label_mod.compute_confidence_mask(tgt_teacher_logits,
+                                                    cfg.trust_gate.tau_conf)
+        target_loss = soft_label_kl_loss(tgt_student_logits, st, cm)
+        trust_coverage = cm.float().mean().item()
+        with torch.no_grad():
+            T = soft_label_mod.compute_temperature(tgt_heatmaps)
+            mean_temp = T[cm.bool()].mean().item() if cm.sum() > 0 else 0.0
+
+    total_loss = source_loss + cfg.training.lambda_target * target_loss
+    optimizer.zero_grad()
+    total_loss.backward()
+    optimizer.step()
+    scheduler.step()
+    ema.update(student)
+
+    if iteration % cfg.logging.log_every == 0:
+        lr = scheduler.get_last_lr()[-1]
+        row = {'iteration': iteration,
+               'total_loss': round(total_loss.item(), 6),
+               'source_loss': round(source_loss.item(), 6),
+               'target_loss': round(target_loss.item(), 6),
+               'trust_coverage_ratio': round(trust_coverage, 4),
+               'mean_temperature': round(mean_temp, 4),
+               'lr': round(lr, 8), 'val_miou': ''}
+        csv_writer.writerow(row); csv_file.flush()
+        if cfg.logging.backend == 'wandb':
+            wandb.log({k:v for k,v in row.items() if v != ''}, step=iteration)
+
+    if iteration % cfg.training.eval_interval == 0 and iteration > 0:
+        student.eval()
+        val_miou, per_class = compute_miou(student, val_loader, device)
+        student.train()
+        print(f"[{iteration}] val mIoU: {val_miou:.2f}%")
+        csv_writer.writerow({'iteration': iteration, 'total_loss': '',
+                             'source_loss': '', 'target_loss': '',
+                             'trust_coverage_ratio': '', 'mean_temperature': '',
+                             'lr': '', 'val_miou': round(val_miou, 4)})
+        csv_file.flush()
+        if cfg.logging.backend == 'wandb':
+            wandb.log({'val/miou': val_miou,
+                       **{f'val/{k}': v for k,v in per_class.items()}},
+                      step=iteration)
+        ckpt = {'model_state': student.state_dict(),
+                'ema_state': ema.state_dict(),
+                'optimizer_state': optimizer.state_dict(),
+                'scheduler_state': scheduler.state_dict(),
+                'iteration': iteration, 'best_miou': best_miou,
+                'config': OmegaConf.to_container(cfg, resolve=True)}
+        torch.save(ckpt, save_dir / 'last.pth')
+        if val_miou > best_miou:
+            best_miou = val_miou
+            torch.save(ckpt, save_dir / 'best.pth')
+            print(f"  ★ New best: {best_miou:.2f}%")
+
+  csv_file.close()
+  if cfg.logging.backend == 'wandb': wandb.finish()
+
+PHASE 6 — evaluation/evaluator.py:
+
+def compute_miou(model, dataloader, device, num_classes=19, ignore_index=255):
+  CITYSCAPES_19 = ['road','sidewalk','building','wall','fence','pole',
+                   'traffic light','traffic sign','vegetation','terrain','sky',
+                   'person','rider','car','truck','bus','train','motorcycle','bicycle']
+  model.eval()
+  confusion = torch.zeros(num_classes, num_classes, dtype=torch.long)
+  with torch.no_grad():
+      for imgs, labels in dataloader:
+          imgs, labels = imgs.to(device), labels.to(device)
+          main_logits, _ = model(imgs)
+          preds = F.interpolate(main_logits, labels.shape[-2:],
+                                mode='bilinear', align_corners=False).argmax(1)
+          mask = labels != ignore_index
+          for t, p in zip(labels[mask].cpu(), preds[mask].cpu()):
+              confusion[t, p] += 1
+  iou = {}
+  for c in range(num_classes):
+      tp = confusion[c,c].item()
+      fp = confusion[:,c].sum().item() - tp
+      fn = confusion[c,:].sum().item() - tp
+      d  = tp + fp + fn
+      iou[CITYSCAPES_19[c]] = (tp/d*100) if d > 0 else 0.0
+  return sum(iou.values())/num_classes, iou
+
+Verify both files:
+  python -c "from training.trainer import main; print('trainer OK')"
+  python -c "from evaluation.evaluator import compute_miou; print('evaluator OK')"
+
+Mark Phase 5 and 6 tasks [x] in tasks.md.
+
+──────────────────────────────────────────────────────────────────────
+
+[HUMAN CHECK]:
+  Both imports print OK.
+
+─────────────────────────────────────────────────────────────────────────────
+STEP 4 — Dry Runs (GPU required)
+[GPU TERMINAL]
+─────────────────────────────────────────────────────────────────────────────
+
+Update data paths in configs/default.yaml first:
+  training.source_root: /data/GTA5
+  training.target_root: /data/cityscapes
+  training.heatmap_root: /data/cityscapes/leftImg8bit/train
+
+T000 — SATG Hard (10 iterations):
+
+  python training/trainer.py --config configs/satg_hard.yaml \
+    training.iterations=10 training.eval_interval=5 training.batch_size=2
+
+[HUMAN CHECK] — passes when:
+  ✓ No NaN or Inf in any loss value
+  ✓ trust_coverage_ratio printed as a float in [0.0, 1.0]
+  ✓ checkpoints/satg_hard_seed42/last.pth exists
+  ✓ metrics.csv created with rows
+  ✓ WandB run URL or TensorBoard log visible
+  ✓ Evaluation ran (any mIoU printed)
+  ✓ No CUDA OOM errors
+
+T000b — SATG Soft-Label (10 iterations):
+
+  python training/trainer.py --config configs/satg_soft_label.yaml \
+    training.iterations=10 training.eval_interval=5 training.batch_size=2
+
+[HUMAN CHECK] — passes when:
+  ✓ No NaN or Inf
+  ✓ target_loss (KL) ≥ 0.0
+  ✓ mean_temperature logged in [1.0, 5.0]
+  ✓ trust_coverage_ratio in [0.0, 1.0]
+
+BOTH must pass before proceeding.
+
+─────────────────────────────────────────────────────────────────────────────
+STEP 5 — Visualization Code
+[CLAUDE CODE] — fresh session
+─────────────────────────────────────────────────────────────────────────────
+
+PASTE:
+──────────────────────────────────────────────────────────────────────
+
+/speckit.implement
+
+Read tasks.md. Confirm T000 and T000b complete. Implementing PHASE 7.
+
+Implement visualization/visualize.py:
+
+  CITYSCAPES_PALETTE = [
+      (128,64,128),(244,35,232),(70,70,70),(102,102,156),(190,153,153),
+      (153,153,153),(250,170,30),(220,220,0),(107,142,35),(152,251,152),
+      (70,130,180),(220,20,60),(255,0,0),(0,0,142),(0,0,70),
+      (0,60,100),(0,80,100),(0,0,230),(119,11,32)
+  ]
+
+  def visualize_trust_gating(image_np, confidence_np, heatmap_np,
+      trust_mask_np, pseudo_label_np, save_path, config_name, stats):
+    5 subplots (1×5), figsize=(25,5):
+      [0] Original RGB image
+      [1] Confidence: cmap='plasma', vmin=0, vmax=1, colorbar labeled "Confidence"
+      [2] Combined heatmap: cmap='hot', vmin=0, vmax=1, colorbar labeled "Complexity"
+      [3] Trust overlay: trusted pixels in original color, rejected 50% grey
+          (for soft_label config, pass confidence_mask as trust_mask_np)
+      [4] Pseudo-label colorized with CITYSCAPES_PALETTE
+    suptitle: f"{config_name} | Coverage:{stats['coverage']:.1f}% |
+               Conf:{stats['mean_conf']:.3f} | Struct:{stats['mean_struct']:.3f}"
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close()   # required — prevent memory leak
+
+  def visualize_components(image_np, component_dict, save_path, img_name):
+    """
+    NEW function: 4-panel figure showing each structural prior component
+    individually. Useful for the paper to justify the 4-cue design.
+    component_dict has keys: edge, var, ent, corn (each [H,W] float32).
+    """
+    4 subplots (1×4), figsize=(20,5):
+      [0] Edge density: cmap='hot', title="Edge Density"
+      [1] Local variance: cmap='hot', title="Local Variance"
+      [2] Local entropy: cmap='hot', title="Local Entropy"
+      [3] Cornerness λ₂: cmap='hot', title="Cornerness λ₂"
+    Each panel has a colorbar.
+    suptitle: f"Structural Components — {img_name}"
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close()
+
+Implement visualization/run_viz.py (CLI):
+  Args: --config, --checkpoint, --output_dir, --num_images (default 10), --split (default val)
+  For each of the --num_images randomly selected images:
+    - Run the 5-panel visualize_trust_gating() — main visualization
+    - ALSO run visualize_components() using the individual component .npy files
+      loaded from disk — saves as {output_dir}/components/{img_name}_components.png
+  Save thumbnail summary grid as output_dir/summary.png
+
+Mark Phase 7 tasks [x] in tasks.md.
+
+──────────────────────────────────────────────────────────────────────
+
+─────────────────────────────────────────────────────────────────────────────
+STEP 6 — Phase 8: Baseline Training Runs
+[GPU TERMINAL] — ~5 hours per run
+─────────────────────────────────────────────────────────────────────────────
+
+  # Source Only — 3 seeds
+  python training/trainer.py --config configs/source_only.yaml seed=42
+  python training/trainer.py --config configs/source_only.yaml seed=1337
+  python training/trainer.py --config configs/source_only.yaml seed=2024
+
+  # Standard Mean Teacher — 3 seeds
+  python training/trainer.py --config configs/baseline_mean_teacher.yaml seed=42
+  python training/trainer.py --config configs/baseline_mean_teacher.yaml seed=1337
+  python training/trainer.py --config configs/baseline_mean_teacher.yaml seed=2024
+
+[HUMAN CHECK] after each set of 3:
+  Record in EXPERIMENTS.md: seed 42, seed 1337, seed 2024, mean±std.
+
+  ★ GATE CHECK: Mean Teacher mIoU MUST exceed Source Only mIoU. ★
+  If not, the training loop has a bug. Do NOT start SATG runs.
+
+─────────────────────────────────────────────────────────────────────────────
+STEP 7 — Phase 9: SATG Main Experiments + Ablations
+[GPU TERMINAL] — ~50 A100-hours total for this step
+─────────────────────────────────────────────────────────────────────────────
+
+Override syntax: python trainer.py --config X.yaml key=value key2=value2
+
+  ─── SATG Hard — 3 seeds ───
+  python training/trainer.py --config configs/satg_hard.yaml seed=42
+  python training/trainer.py --config configs/satg_hard.yaml seed=1337
+  python training/trainer.py --config configs/satg_hard.yaml seed=2024
+
+  ─── SATG Soft-Weight — 3 seeds ───
+  python training/trainer.py --config configs/satg_soft_weight.yaml seed=42
+  python training/trainer.py --config configs/satg_soft_weight.yaml seed=1337
+  python training/trainer.py --config configs/satg_soft_weight.yaml seed=2024
+
+  ─── SATG Soft-Label — 3 seeds (or 1 if budget tight) ───
+  python training/trainer.py --config configs/satg_soft_label.yaml seed=42
+  python training/trainer.py --config configs/satg_soft_label.yaml seed=1337
+  python training/trainer.py --config configs/satg_soft_label.yaml seed=2024
+
+  ─── Ablation A: Prior component type (4 runs) ───
+  NOTE: Because we store 4 separate component files and combine at load time,
+  NO re-precomputation is needed. Just override the weights.
+
+  # Edge density only
+  python training/trainer.py --config configs/satg_hard.yaml seed=42 \
+    structural_prior.edge_weight=1.0 structural_prior.variance_weight=0.0 \
+    structural_prior.entropy_weight=0.0 structural_prior.cornerness_weight=0.0
+
+  # Local variance only
+  python training/trainer.py --config configs/satg_hard.yaml seed=42 \
+    structural_prior.edge_weight=0.0 structural_prior.variance_weight=1.0 \
+    structural_prior.entropy_weight=0.0 structural_prior.cornerness_weight=0.0
+
+  # Local entropy only (NEW)
+  python training/trainer.py --config configs/satg_hard.yaml seed=42 \
+    structural_prior.edge_weight=0.0 structural_prior.variance_weight=0.0 \
+    structural_prior.entropy_weight=1.0 structural_prior.cornerness_weight=0.0
+
+  # Cornerness λ₂ only (NEW)
+  python training/trainer.py --config configs/satg_hard.yaml seed=42 \
+    structural_prior.edge_weight=0.0 structural_prior.variance_weight=0.0 \
+    structural_prior.entropy_weight=0.0 structural_prior.cornerness_weight=1.0
+
+  # All-four equal (already done from SATG Hard seed=42 above — no rerun needed)
+
+  ─── Ablation B: tau_conf sensitivity ───
+  python training/trainer.py --config configs/satg_hard.yaml seed=42 \
+    trust_gate.tau_conf=0.80
+  python training/trainer.py --config configs/satg_hard.yaml seed=42 \
+    trust_gate.tau_conf=0.95
+
+  ─── Ablation C: tau_struct sensitivity ───
+  python training/trainer.py --config configs/satg_hard.yaml seed=42 \
+    trust_gate.tau_struct=0.40
+  python training/trainer.py --config configs/satg_hard.yaml seed=42 \
+    trust_gate.tau_struct=0.70
+
+  ─── Ablation F: soft_label_k sensitivity ───
+  python training/trainer.py --config configs/satg_soft_label.yaml seed=42 \
+    trust_gate.soft_label_k=2.0
+  python training/trainer.py --config configs/satg_soft_label.yaml seed=42 \
+    trust_gate.soft_label_k=6.0
+
+[HUMAN CHECK] — after all Phase 9:
+  EXPERIMENTS.md must have rows for:
+    Source Only (mean±std)
+    Mean Teacher (mean±std)
+    SATG Hard (mean±std)
+    SATG Soft-Weight (mean±std)
+    SATG Soft-Label (mean±std or single-seed)
+    Ablation A: edge-only, variance-only, entropy-only, cornerness-only
+    Ablation B: tau_conf=0.80, 0.95
+    Ablation C: tau_struct=0.40, 0.70
+    Ablation F: k=2.0, k=6.0
+
+─────────────────────────────────────────────────────────────────────────────
+STEP 8 — Session 6: Visualizations + Documentation
+─────────────────────────────────────────────────────────────────────────────
+
+Part A: Generate all visualizations
+[GPU TERMINAL]:
+
+  python visualization/run_viz.py \
+    --config configs/satg_hard.yaml \
+    --checkpoint checkpoints/satg_hard_seed42/best.pth \
+    --output_dir visualizations/satg_hard --num_images 10
+
+  python visualization/run_viz.py \
+    --config configs/satg_soft_weight.yaml \
+    --checkpoint checkpoints/satg_soft_weight_seed42/best.pth \
+    --output_dir visualizations/satg_soft_weight --num_images 10
+
+  python visualization/run_viz.py \
+    --config configs/satg_soft_label.yaml \
+    --checkpoint checkpoints/satg_soft_label_seed42/best.pth \
+    --output_dir visualizations/satg_soft_label --num_images 10
+
+  python visualization/run_viz.py \
+    --config configs/baseline_mean_teacher.yaml \
+    --checkpoint checkpoints/baseline_mean_teacher_seed42/best.pth \
+    --output_dir visualizations/mean_teacher --num_images 10
+
+[HUMAN CHECK]:
+  Open the 5-panel PNGs for satg_hard:
+    Sky and flat road: mostly colored (trusted), minimal grey overlay
+    Dense vegetation, mixed backgrounds: heavy grey overlay (rejected)
+    Verify at least 3 images show SATG rejecting a visually wrong pseudo-label
+  Open the component PNGs (new from this extension):
+    Each of the 4 components should look visually distinct
+    Entropy should look "busier" than edge density
+    Cornerness should show high response at corners and junctions
+
+Part B: Per-class analysis
+[GPU TERMINAL] — after Part C writes the script:
+
+  python evaluation/per_class_analysis.py \
+    --config configs/satg_hard.yaml \
+    --checkpoint checkpoints/satg_hard_seed42/best.pth \
+    --mean_teacher_checkpoint checkpoints/baseline_mean_teacher_seed42/best.pth \
+    --output_dir visualizations/per_class_analysis \
+    --csv_log checkpoints/satg_hard_seed42/metrics.csv
+
+Part C: Final documentation
+[CLAUDE CODE] — fresh session:
+
+PASTE:
+──────────────────────────────────────────────────────────────────────
+
+/speckit.implement
+
+Read tasks.md and current EXPERIMENTS.md. We are completing PHASE 10.
+
+Task 1: evaluation/per_class_analysis.py
+  Args: --config, --checkpoint, --mean_teacher_checkpoint, --output_dir, --csv_log
+  For each of the 19 classes, over Cityscapes val:
+    - Mean structural heatmap value in that class's GT pixels
+    - Mean trust_coverage_ratio in that class's GT pixels
+    - Delta IoU = SATG Hard class IoU - Mean Teacher class IoU
+  Outputs:
+    coverage_by_class.png (horizontal bar chart, sorted ascending)
+    delta_iou_by_class.png (positive=green, negative=red)
+  Calls visualization/plot_metrics.py:
+    plot_coverage_over_time(csv_log, output_dir/coverage_over_time.png)
+  Additional output for the 4-component system:
+    component_correlation.png — scatter plots of edge vs. ent, var vs. corn
+    for a sample of 50 images, to show the four components are non-redundant.
+
+Task 2: README.md — full guide with exact CLI commands for all steps:
+  install, GTA5 preprocessing, 4-component heatmap precomputation,
+  training each config, evaluation, visualization.
+  Note that the structural prior now uses 4 components (edge, var, ent, corn)
+  and describe what each captures in a brief Methods section.
+  Include the results table from EXPERIMENTS.md.
+
+Task 3: EXPERIMENTS.md finalized table:
+  | Method | mIoU (mean±std) | Road | Sidewalk | Person | Rider | Bicycle | Pole | Sign | Notes |
+  Include all ablation rows. Mark single-seed results clearly.
+
+Task 4: Final test suite:
+  pytest tests/ -v --cov=satg --cov=models --cov=data \
+    --cov=training --cov=evaluation --cov-report=term-missing
+  All tests must pass. Coverage ≥ 80%. Show full output.
+
+Mark all Phase 10 tasks [x] in tasks.md.
+
+──────────────────────────────────────────────────────────────────────
+
+
+================================================================================
+UPDATED RUN COUNT SUMMARY
+================================================================================
+
+  Source Only           3 runs  (Step 6)
+  Mean Teacher          3 runs  (Step 6)
+  SATG Hard             3 runs  (Step 7)
+  SATG Soft-Weight      3 runs  (Step 7)
+  SATG Soft-Label       3 runs  (Step 7) — or 1 seed
+  Ablation A: 4 types   4 runs  (Step 7) — was 2, now 4 (entropy + cornerness added)
+  Ablation B: tau_conf  2 runs  (Step 7)
+  Ablation C: tau_struct 2 runs (Step 7)
+  Ablation F: k         2 runs  (Step 7)
+  ──────────────────────────────────────────────────────
+  TOTAL                25 runs  (~125 A100-hours)
+  If Soft-Label = 1:   23 runs  (~115 A100-hours)
+
+  Ablation A costs 0 additional precomputation time because the 4 component
+  files are stored separately and combined at dataloader time via config weights.
+  Only training time differs (same 5 hours per ablation run).
+
+================================================================================
+END OF SATG STRUCTURAL EXTENSION + REMAINING GUIDE
+================================================================================
