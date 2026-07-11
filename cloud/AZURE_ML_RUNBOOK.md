@@ -297,6 +297,64 @@ python -m training.trainer --config configs/satg_hard.yaml \
     trust_gate.tau_conf=0.95 trust_gate.tau_struct=0.70 seed=42
 ```
 
+### After training — figures + tables (Phase 10)
+
+Once runs finish, generate the repo's analysis outputs (all write to blob via the
+`visualizations/` dir if you symlink it, or local + download). ☁️ **on the node:**
+
+```bash
+# 1. Qualitative 1x5 trust-mask panels for the primary SATG variants
+for v in satg_hard satg_soft_weight satg_soft_label; do
+  python -m visualization.visualize \
+      --checkpoint checkpoints/${v}_seed42/best.pth \
+      --config configs/${v}.yaml \
+      --num_images 10 --output_dir visualizations/
+done
+
+# 2. Trust-coverage-over-time plots from each run's metrics.csv
+python - <<'PY'
+import glob, os
+from visualization.plot_metrics import plot_coverage_over_time
+os.makedirs("visualizations/training_metrics", exist_ok=True)
+for csv in glob.glob("checkpoints/*/metrics.csv"):
+    run = os.path.basename(os.path.dirname(csv))
+    out = f"visualizations/training_metrics/{run}_coverage.png"
+    try:
+        plot_coverage_over_time(csv, out); print("wrote", out)
+    except Exception as e:
+        print("skip", run, "-", e)
+PY
+
+# 3. Per-experiment best mIoU with mean±std across seeds (for EXPERIMENTS.md)
+python - <<'PY'
+import glob, os, csv, re, statistics as st
+from collections import defaultdict
+runs = defaultdict(list)
+for f in glob.glob("checkpoints/*/metrics.csv"):
+    run = os.path.basename(os.path.dirname(f))
+    exp = re.sub(r"_seed\d+$", "", run)
+    best = 0.0
+    for row in csv.DictReader(open(f)):
+        v = row.get("val_miou", "")
+        if v not in ("", None): best = max(best, float(v))
+    if best: runs[exp].append(best)
+print(f"{'experiment':32} {'n':>2} {'mean_mIoU':>9} {'std':>6}")
+for exp, xs in sorted(runs.items()):
+    s = st.pstdev(xs) if len(xs) > 1 else 0.0
+    print(f"{exp:32} {len(xs):>2} {sum(xs)/len(xs):9.2f} {s:6.2f}")
+PY
+```
+
+`run_phase8.sh` / `run_phase9.sh` also print their own summary tables, and every run
+is in WandB under `satg-uda`. The final `README.md` / `EXPERIMENTS.md` write-ups
+(Phase 10 T049–T_FINAL) are manual authoring from these numbers.
+
+Optional — validate the code with the unit tests (no GPU needed, fast):
+
+```bash
+pytest -q
+```
+
 ---
 
 ## 10. Monitor
