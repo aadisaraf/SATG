@@ -56,22 +56,44 @@ run_experiment() {
     local seed="$5"
     local logfile="$LOG_DIR/phase9_${name}_seed${seed}.log"
 
+    # Unique run identity per experiment. Ablations share a config
+    # (e.g. satg_hard.yaml) but differ by overrides, so we key the checkpoint
+    # dir off the experiment NAME (not the config stem) and pass it to the
+    # trainer via --run_name. This keeps each run's checkpoints isolated and
+    # makes --resume safe (a run only ever resumes its own last.pth).
+    local run_stem="${name}_seed${seed}"
+    local done_marker="checkpoints/${run_stem}/.done"
+
     echo "-----------------------------------------------------------------"
     echo "  [$section] $name  seed=$seed"
     echo "  Config: $config"
     echo "  Log:    $logfile"
     echo "-----------------------------------------------------------------"
 
+    # Eviction-safe: skip runs that already finished.
+    if [ -f "$done_marker" ]; then
+        echo "  ↳ SKIP — already complete ($done_marker)"
+        echo "$section | $name | seed=$seed | SKIPPED (done)" >> "$RESULTS_FILE"
+        echo ""
+        return 0
+    fi
+
     local run_start=$(date +%s)
 
-    # Build command: config + overrides + seed
+    # Build command: config + overrides + seed.
+    # --resume continues from last.pth if a prior attempt was evicted mid-run.
+    # PIPESTATUS captures python's real exit code, not tee's.
     # shellcheck disable=SC2086
+    set +e
     python -m training.trainer \
         --config "$config" \
+        --run_name "$run_stem" \
+        --resume \
         $overrides \
         "seed=$seed" \
         2>&1 | tee "$logfile"
-    local exit_code=$?
+    local exit_code=${PIPESTATUS[0]}
+    set -e
 
     local run_end=$(date +%s)
     local duration=$((run_end - run_start))
@@ -80,6 +102,8 @@ run_experiment() {
 
     if [ "$exit_code" -eq 0 ]; then
         echo "  ✓ [$section] $name seed=$seed completed in ${minutes}m${seconds}s"
+        # Mark complete so re-runs after an eviction skip this run.
+        mkdir -p "checkpoints/${run_stem}" && touch "$done_marker"
         BEST_MIOU=$(grep "★ New best" "$logfile" | tail -1 | grep -oP '\d+\.\d+(?=%)' || echo "N/A")
         echo "$section | $name | seed=$seed | ${minutes}m${seconds}s | best_mIoU=$BEST_MIOU" >> "$RESULTS_FILE"
     else

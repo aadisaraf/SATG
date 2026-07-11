@@ -42,6 +42,28 @@ def main() -> None:
     # ── Argument parsing ──────────────────────────────────────────────────
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True, type=str)
+    parser.add_argument(
+        "--run_name",
+        default=None,
+        type=str,
+        help=(
+            "Override the run identity (checkpoint dir + wandb name). Defaults "
+            "to '<config-stem>_seed<seed>'. Give distinct names to runs that "
+            "share a config but differ by overrides (e.g. ablations) so their "
+            "checkpoints don't collide."
+        ),
+    )
+    parser.add_argument(
+        "--resume",
+        nargs="?",
+        const="auto",
+        default=None,
+        type=str,
+        help=(
+            "Resume training. Bare --resume auto-loads <save_dir>/last.pth; "
+            "pass a path to resume from a specific checkpoint."
+        ),
+    )
     parser.add_argument("overrides", nargs="*")
     args = parser.parse_args()
 
@@ -63,24 +85,51 @@ def main() -> None:
     torch.backends.cudnn.benchmark = cfg.training.get("cudnn_benchmark", False)
 
     # ── Logging and checkpoint setup ──────────────────────────────────────
-    run_name = f"{Path(args.config).stem}_seed{cfg.seed}"
+    run_name = args.run_name or f"{Path(args.config).stem}_seed{cfg.seed}"
     save_dir = Path(cfg.checkpoint.save_dir) / run_name
     save_dir.mkdir(parents=True, exist_ok=True)
     OmegaConf.save(cfg, save_dir / "config.yaml")
 
+    # ── Resume checkpoint resolution ──────────────────────────────────────
+    # Resolve the checkpoint to resume from (if any) and load it onto CPU so
+    # its wandb run id is available before wandb.init(). Model/optimizer states
+    # are applied further down, once those objects exist.
+    resume_ckpt = None
+    if args.resume is not None:
+        resume_path = (
+            save_dir / "last.pth" if args.resume == "auto" else Path(args.resume)
+        )
+        if resume_path.is_file():
+            resume_ckpt = torch.load(resume_path, map_location="cpu")
+            print(
+                f"Resuming from {resume_path} "
+                f"(iteration {resume_ckpt.get('iteration', 0)})"
+            )
+        elif args.resume == "auto":
+            print(f"No checkpoint at {resume_path} — starting fresh.")
+        else:
+            raise FileNotFoundError(f"--resume checkpoint not found: {resume_path}")
+
     if cfg.logging.backend == "wandb":
+        wandb_run_id = (
+            resume_ckpt.get("wandb_run_id") if resume_ckpt else None
+        ) or wandb.util.generate_id()
         wandb.init(
             project=cfg.logging.project,
             name=run_name,
             config=OmegaConf.to_container(cfg, resolve=True),
+            id=wandb_run_id,
+            resume="allow",
         )
     else:
         from torch.utils.tensorboard import SummaryWriter
 
         tb_writer = SummaryWriter(log_dir=str(save_dir / "tb_logs"))
 
+    # Append to metrics.csv when resuming an existing run; otherwise truncate.
     csv_path = save_dir / "metrics.csv"
-    csv_file = open(csv_path, "w", newline="")
+    resume_csv = resume_ckpt is not None and csv_path.is_file()
+    csv_file = open(csv_path, "a" if resume_csv else "w", newline="")
     csv_writer = csv.DictWriter(
         csv_file,
         fieldnames=[
@@ -94,7 +143,8 @@ def main() -> None:
             "val_miou",
         ],
     )
-    csv_writer.writeheader()
+    if not resume_csv:
+        csv_writer.writeheader()
 
     # ── Device and models ─────────────────────────────────────────────────
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -138,6 +188,20 @@ def main() -> None:
     )
 
     scaler = GradScaler(enabled=cfg.training.use_amp)
+
+    # ── Restore state from resume checkpoint ──────────────────────────────
+    start_iter = 0
+    resumed_best_miou = 0.0
+    if resume_ckpt is not None:
+        student.load_state_dict(resume_ckpt["model_state"])
+        ema.load_state_dict(resume_ckpt["ema_state"])
+        ema.model = ema.model.to(device)
+        optimizer.load_state_dict(resume_ckpt["optimizer_state"])
+        scheduler.load_state_dict(resume_ckpt["scheduler_state"])
+        if resume_ckpt.get("scaler_state") is not None:
+            scaler.load_state_dict(resume_ckpt["scaler_state"])
+        start_iter = int(resume_ckpt.get("iteration", 0)) + 1
+        resumed_best_miou = float(resume_ckpt.get("best_miou", 0.0))
 
     # ── Datasets and loaders ──────────────────────────────────────────────
     source_dataset = GTA5Dataset(cfg)
@@ -189,11 +253,16 @@ def main() -> None:
         source_criterion = nn.CrossEntropyLoss(ignore_index=255)
 
     # ── Training loop ─────────────────────────────────────────────────────
-    best_miou = 0.0
+    best_miou = resumed_best_miou
     mean_temp = 0.0
 
-    pbar = tqdm(total=cfg.training.iterations, desc="Training", unit="iter")
-    for iteration in range(cfg.training.iterations):
+    pbar = tqdm(
+        total=cfg.training.iterations,
+        initial=start_iter,
+        desc="Training",
+        unit="iter",
+    )
+    for iteration in range(start_iter, cfg.training.iterations):
         student.train()
 
         # ── Source forward ────────────────────────────────────────────────
@@ -333,18 +402,29 @@ def main() -> None:
                     step=iteration,
                 )
 
+            # Update best BEFORE snapshotting so last.pth carries the correct
+            # best_miou — this is what --resume reads back.
+            is_new_best = val_miou > best_miou
+            if is_new_best:
+                best_miou = val_miou
+
             ckpt = {
                 "model_state": student.state_dict(),
                 "ema_state": ema.state_dict(),
                 "optimizer_state": optimizer.state_dict(),
                 "scheduler_state": scheduler.state_dict(),
+                "scaler_state": scaler.state_dict() if cfg.training.use_amp else None,
                 "iteration": iteration,
                 "best_miou": best_miou,
+                "wandb_run_id": (
+                    wandb.run.id
+                    if cfg.logging.backend == "wandb" and wandb.run is not None
+                    else None
+                ),
                 "config": OmegaConf.to_container(cfg, resolve=True),
             }
             torch.save(ckpt, save_dir / "last.pth")
-            if val_miou > best_miou:
-                best_miou = val_miou
+            if is_new_best:
                 torch.save(ckpt, save_dir / "best.pth")
                 print(f"  ★ New best: {best_miou:.2f}%")
 

@@ -93,46 +93,27 @@ else
 fi
 
 # =============================================================================
-# Step 2 — Cityscapes download (manual)
+# Step 2 — Cityscapes download (Kaggle, automated)
 # =============================================================================
 echo ""
 echo "=========================================="
-echo "  Step 2 / 4: Cityscapes Download"
+echo "  Step 2 / 4: Cityscapes Download (Kaggle)"
 echo "=========================================="
 echo ""
-echo "  Cityscapes requires a registered account. Download manually:"
-echo ""
-echo "  1. Register at:  https://cityscapes-dataset.com/register/"
-echo "  2. Download both ZIP files from:  https://cityscapes-dataset.com/downloads/"
-echo "       - leftImg8bit_trainvaltest.zip  (∼11 GB, RGB images)"
-echo "       - gtFine_trainvaltest.zip       (∼1.5 GB, labels)"
-echo "  3. Extract into '$CITYSCAPES_ROOT':"
-echo ""
-echo "       mkdir -p \"$CITYSCAPES_ROOT\""
-echo "       unzip leftImg8bit_trainvaltest.zip -d \"$CITYSCAPES_ROOT\""
-echo "       unzip gtFine_trainvaltest.zip -d \"$CITYSCAPES_ROOT\""
-echo ""
-echo "  4. Generate trainId labels (gtFine_labelTrainIds.png) using Cityscapes scripts:"
-echo ""
-echo "       # Install cityscapes scripts:"
-echo "       pip install cityscapesscripts"
-echo ""
-echo "       # Run label conversion (creates _trainIds.png copies):"
-echo "       csCreateTrainIdLabelImgs -i \"$CITYSCAPES_ROOT/gtFine\""
-echo ""
-echo "       # Alternative — manual symlink approach:"
-echo "       python -c \""
-echo "       import os, glob"
-echo "       for f in glob.glob('$CITYSCAPES_ROOT/gtFine/train/*/*_labelIds.png'):"
-echo "           trainid_path = f.replace('_labelIds.png', '_trainIds.png')"
-echo "           if not os.path.exists(trainid_path):"
-echo "               os.symlink(os.path.basename(f), trainid_path)"
-echo "       \""
-echo ""
-echo "  5. Verify the directory structure:"
-echo ""
-echo "       ls \"$CITYSCAPES_ROOT/leftImg8bit/train/\"   # should list city dirs"
-echo "       ls \"$CITYSCAPES_ROOT/gtFine/train/\"         # should list city dirs"
+
+if [ -d "$CITYSCAPES_ROOT/leftImg8bit/train" ] && [ -d "$CITYSCAPES_ROOT/gtFine/train" ]; then
+    echo "  Cityscapes already present at $CITYSCAPES_ROOT — skipping download."
+elif [ -f "cloud/download_cityscapes.sh" ]; then
+    echo "  Fetching leftImg8bit + gtFine from Kaggle mirrors."
+    echo "  Requires Kaggle credentials (~/.kaggle/kaggle.json or KAGGLE_USERNAME/KAGGLE_KEY)."
+    echo ""
+    bash cloud/download_cityscapes.sh "$CITYSCAPES_ROOT"
+else
+    echo "  WARNING: cloud/download_cityscapes.sh not found."
+    echo "  Download manually from Kaggle:"
+    echo "    kaggle datasets download -d chrisviviers/cityscapes-leftimg8bit-trainvaltest -p \"$CITYSCAPES_ROOT\" --unzip"
+    echo "    kaggle datasets download -d kclaude/gtfine-trainvaltest              -p \"$CITYSCAPES_ROOT\" --unzip"
+fi
 echo ""
 
 # =============================================================================

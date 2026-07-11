@@ -45,18 +45,34 @@ run_experiment() {
     local seed="$3"
     local logfile="$4"
 
+    # Completion marker lives next to the checkpoints so it survives evictions.
+    local run_stem="$(basename "${config%.yaml}")_seed${seed}"
+    local done_marker="checkpoints/${run_stem}/.done"
+
     echo "-----------------------------------------------------------------"
     echo "  [$name] seed=$seed"
     echo "  Config: $config"
     echo "  Log:    $logfile"
     echo "-----------------------------------------------------------------"
 
+    # Eviction-safe: skip runs that already finished.
+    if [ -f "$done_marker" ]; then
+        echo "  ↳ SKIP — already complete ($done_marker)"
+        echo "$name | seed=$seed | SKIPPED (done)" >> "$RESULTS_FILE"
+        echo ""
+        return 0
+    fi
+
     # Record start
     local run_start=$(date +%s)
 
-    # Run training
-    python -m training.trainer --config "$config" "seed=$seed" 2>&1 | tee "$logfile"
-    local exit_code=$?
+    # Run training (--resume continues from last.pth if a prior attempt was
+    # evicted mid-run; starts fresh otherwise). PIPESTATUS captures python's
+    # real exit code, not tee's.
+    set +e
+    python -m training.trainer --config "$config" --resume "seed=$seed" 2>&1 | tee "$logfile"
+    local exit_code=${PIPESTATUS[0]}
+    set -e
 
     local run_end=$(date +%s)
     local duration=$((run_end - run_start))
@@ -65,6 +81,8 @@ run_experiment() {
 
     if [ "$exit_code" -eq 0 ]; then
         echo "  ✓ [$name] seed=$seed completed in ${minutes}m${seconds}s"
+        # Mark complete so re-runs after an eviction skip this run.
+        mkdir -p "checkpoints/${run_stem}" && touch "$done_marker"
         # Extract best mIoU from log
         BEST_MIOU=$(grep "★ New best" "$logfile" | tail -1 | grep -oP '\d+\.\d+(?=%)' || echo "N/A")
         echo "$name | seed=$seed | ${minutes}m${seconds}s | best_mIoU=$BEST_MIOU" >> "$RESULTS_FILE"
