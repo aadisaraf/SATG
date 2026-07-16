@@ -1,201 +1,150 @@
-# SATG — Azure ML Compute Cluster + Blob Storage Runbook (Windows / PowerShell)
+# SATG — Azure ML Compute Cluster + Blob Runbook (Windows / PowerShell)
 
-End-to-end runbook for training **Structure-Aware Trust Gating (SATG)** on the
-`chesstraining` **Azure ML compute cluster**, driven from a **Windows / PowerShell**
-laptop, with **all datasets + checkpoints on Azure Blob storage** so they survive
-node recycling.
+Definitive end-to-end runbook for training **Structure-Aware Trust Gating (SATG)**
+on an Azure ML **compute cluster** node, driven from **Windows / PowerShell**, with
+all datasets + checkpoints on **Azure Blob** so they survive node recycling. Every
+fix discovered during bring-up is baked in.
 
-> **Read the shell tag on every code block:**
-> - 🖥️ **PowerShell (local)** — runs on your Windows laptop.
-> - ☁️ **Bash (on the node)** — runs on the cluster node *after* you SSH in.
+> **Shell tags:** 🖥️ = PowerShell on your laptop · ☁️ = bash on the node (after SSH).
 
 ---
 
-## Architecture (why it's built this way)
+## Storage you need
 
-A compute **cluster** node is transient: when the cluster scales down it is
-**deallocated and its local disks are wiped**. It also can't take an attached data
-disk. So:
+| Component | Size |
+|---|---|
+| GTA5 (images + trainId labels) | ~58 GB |
+| Cityscapes (leftImg8bit + gtFine + trainIds) | ~13 GB |
+| SATG heatmaps (2,975 × 32 MB) | ~95 GB |
+| Checkpoints (~41 runs × ~1 GB) | ~45 GB |
+| Logs + visualizations | ~2 GB |
+| **Total persistent (blob)** | **~210 GB — provision ~250 GB** |
 
-- **Persistent stuff → Azure Blob** (mounted at `~/blob` via blobfuse2): the repo's
-  `data/`, `checkpoints/`, and `cloud/logs/` are **symlinked onto the blob mount**.
-  They survive any node recycle.
-- **Disposable stuff → local disk**: the code checkout (`~/SATG`, trivially
-  re-clonable) and the blobfuse **cache** (`/mnt/blobcache`, on the ephemeral temp
-  disk).
-- **Keep the node alive** during long runs by setting the cluster's **min nodes = 1**
-  (Step 0) — otherwise it can scale to zero *under you* mid-run.
-- Training is **`--resume`-safe** and checkpoints live on blob, so even a recycle
-  only costs ≤2000 iters of the in-flight run.
-
-> ⚠️ **Performance note.** The full working set (GTA5 ~57 GB + Cityscapes ~13 GB +
-> heatmaps ~95 GB) is far larger than the local blobfuse cache (~45 GB on `/mnt`),
-> so training reads that miss cache go over the network to blob. It **works**, but
-> expect training to run slower than local-disk estimates. If it's too slow, either
-> use a cluster SKU with a bigger temp disk (larger cache) or cut scope (smaller
-> GTA5 subset / Phase-8 baselines only, which need no heatmaps).
+Plus **~50 GB free on the local temp disk `/mnt`** for GTA5 zip staging, and ~40 GB
+of `/mnt` for the blob read-cache during training.
 
 ---
 
-## 0. Node facts + keep the node alive
+## 0. Node facts + keep it alive
 
 | Field | Value |
 |-------|-------|
-| Public IP | `20.125.122.201` |
+| IP | `172.182.230.39` |
 | SSH port | `50000` |
-| SSH key | `~\.ssh\id_rsa_azureml` (the `chessmamba-azureml` keypair) |
-| Login user | `azureuser` |
-| Resource group | `pranav-rg` |
-| Compute cluster | `chesstraining` |
-| Region | `westus3` |
+| User | `azureuser` |
+| SSH key | `~\.ssh\id_rsa_azureml` |
+| Resource group | `pranav-rg` · Region `westus3` |
+| Blob storage acct | `satg131168` · container `satg-data` (reused — GTA5 resumes) |
 
-🖥️ **PowerShell (local)** — set these once *in your current window*:
-
-```powershell
-$SATG_HOST = "20.125.122.201"
-$SATG_PORT = "50000"
-$SATG_USER = "azureuser"
-$SATG_KEY  = "$HOME\.ssh\id_rsa_azureml"
-$RG        = "pranav-rg"
-$LOC       = "westus3"
-```
-
-**Keep the cluster from scaling to zero mid-run.** In **Azure ML Studio** → *Compute*
-→ *Compute clusters* → **chesstraining** → *Edit* → set **Minimum number of nodes = 1**
-→ Save. (This bills continuously while set — drop it back to 0 when you're done.)
-
-CLI alternative (needs the `ml` extension + your workspace name):
+🖥️ **PowerShell (local)** — set once per window:
 
 ```powershell
-az extension add -n ml
-az ml compute update -g $RG -n chesstraining --workspace-name <your-workspace> --min-instances 1
+$SATG_HOST="172.182.230.39"; $SATG_PORT="50000"; $SATG_USER="azureuser"
+$SATG_KEY="$HOME\.ssh\id_rsa_azureml"
+$SA="satg131168"                      # existing storage account
 ```
+
+**⚠️ FIRST, in Azure ML Studio: set the cluster's Minimum nodes = 1.**
+Compute → Compute clusters → *(this node's cluster)* → Edit → **Minimum number of
+nodes = 1** → Save. Without this the cluster deallocates the node when it looks idle
+(a manual SSH job doesn't count), wiping `/mnt` and killing your run. Set back to 0
+when the whole project is done.
 
 ---
 
-## 1. Connect
+## 1. Connect (with keepalive so SSH doesn't drop)
 
 🖥️ **PowerShell (local):**
 
 ```powershell
-ssh -i $SATG_KEY -p $SATG_PORT "$($SATG_USER)@$($SATG_HOST)"
+ssh -o ServerAliveInterval=60 -o ServerAliveCountMax=5 -i $SATG_KEY -p $SATG_PORT "$($SATG_USER)@$($SATG_HOST)"
 ```
 
-If it prompts for a **password**, `-i` is pointing at the wrong file — fix `$SATG_KEY`
-(your key is `~\.ssh\id_rsa_azureml`).
+Password prompt instead of a login = wrong key path; fix `$SATG_KEY`.
 
 ---
 
-## 2. Create the Blob container (persistent storage)
+## 2. Mount blob (small cache for the data-prep phase)
 
-🖥️ **PowerShell (local)** — create a dedicated storage account + container
-(install CLI first if needed: `winget install -e --id Microsoft.AzureCLI`, then
-reopen PowerShell):
-
-```powershell
-az login
-$SA = "satg" + (Get-Random -Maximum 999999)      # storage acct name: globally unique, lowercase
-az storage account create -g $RG -n $SA -l $LOC --sku Standard_LRS --kind StorageV2
-$KEY = az storage account keys list -g $RG -n $SA --query "[0].value" -o tsv
-az storage container create --account-name $SA --account-key $KEY -n satg-data
-
-# print the two values you'll paste on the node (keep them private):
-Write-Host "STORAGE ACCOUNT: $SA"
-Write-Host "STORAGE KEY:     $KEY"
-```
-
-Copy the **account name** and **key** — you'll paste them into the node config next.
-(~200 GB on Standard_LRS blob ≈ a few $/month plus transactions.)
-
----
-
-## 3. Mount the container on the node (blobfuse2)
-
-☁️ **Bash (on the node)** — install blobfuse2 if missing, set up a cache on the
-ephemeral temp disk, write the config, and mount:
+☁️ **on the node** — install blobfuse2 if missing, make a cache dir on the temp
+disk, write the config, mount. Use a **small 4 GB cache during data prep** so `/mnt`
+has room for GTA5 staging (we bump it up before training in Step 7).
 
 ```bash
-# 3a. install blobfuse2 (skip if already present)
 command -v blobfuse2 >/dev/null || {
   wget -q "https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/packages-microsoft-prod.deb" -O /tmp/pmp.deb
   sudo dpkg -i /tmp/pmp.deb && sudo apt-get update && sudo apt-get install -y blobfuse2
 }
-
-# 3b. cache dir on the temp disk (safe to lose)
 sudo mkdir -p /mnt/blobcache && sudo chown "$USER:$USER" /mnt/blobcache
 
-# 3c. write the blobfuse2 config — EDIT the two REPLACE_ lines afterwards
 cat > ~/blobfuse2.yaml <<'YAML'
 components: [libfuse, file_cache, attr_cache, azstorage]
-libfuse:
-  attribute-expiration-sec: 120
-  entry-expiration-sec: 120
-file_cache:
-  path: /mnt/blobcache
-  timeout-sec: 600
-  max-size-mb: 45000          # ~45 GB cache; keep under /mnt free space
-attr_cache:
-  timeout-sec: 120
+libfuse: {attribute-expiration-sec: 120, entry-expiration-sec: 120}
+file_cache: {path: /mnt/blobcache, timeout-sec: 600, max-size-mb: 4000}
+attr_cache: {timeout-sec: 120}
 azstorage:
   type: block
   mode: key
-  account-name: REPLACE_ACCOUNT
-  account-key: REPLACE_KEY
-  endpoint: https://REPLACE_ACCOUNT.blob.core.windows.net
+  account-name: satg131168
+  account-key: PASTE_KEY_HERE
+  endpoint: https://satg131168.blob.core.windows.net
   container: satg-data
 YAML
+nano ~/blobfuse2.yaml          # replace PASTE_KEY_HERE with your storage key
 
-# 3d. paste your values in (replace both placeholders):
-nano ~/blobfuse2.yaml         # set account-name (x2, incl. endpoint) and account-key
-
-# 3e. mount
 mkdir -p ~/blob
 blobfuse2 mount ~/blob --config-file="$HOME/blobfuse2.yaml"
-ls -la ~/blob                 # should succeed (empty container = empty listing)
+findmnt ~/blob                 # MUST print a 'blobfuse2 fuse' line
+mkdir -p ~/blob/data ~/blob/checkpoints ~/blob/logs
 ```
 
-> If mount fails, run it in the foreground to see the error:
-> `blobfuse2 mount ~/blob --config-file=$HOME/blobfuse2.yaml --foreground`
+> Get the key from 🖥️ PowerShell if you don't have it:
+> `az storage account keys list -g pranav-rg -n satg131168 --query "[0].value" -o tsv`
 
 ---
 
-## 4. Get the code + wire it to blob
+## 3. Code + link to blob
 
-☁️ **Bash (on the node)** — clone the repo locally (fast, re-clonable), then point
-`data/`, `checkpoints/`, and `cloud/logs/` at the blob mount via symlinks so all
-heavy + valuable output lands on persistent storage:
+☁️ **on the node** — clone locally (cheap to re-clone after a recycle), symlink the
+heavy dirs onto blob:
 
 ```bash
-# code lives locally; it's cheap to re-clone if the node recycles
-cd ~ && git clone <your-SATG-repo-url> SATG && cd ~/SATG
-
-# persistent dirs on blob
-mkdir -p ~/blob/data ~/blob/checkpoints ~/blob/logs
-
-# symlink them into the repo (default config paths then "just work")
-ln -sfn ~/blob/data        data
+cd ~ && git clone -b azure-ml-runbook https://github.com/aadisaraf/SATG.git SATG && cd ~/SATG
+rm -rf data checkpoints cloud/logs
+ln -sfn ~/blob/data data
 ln -sfn ~/blob/checkpoints checkpoints
-ln -sfn ~/blob/logs        cloud/logs
-
-ls -la data checkpoints cloud/logs   # each should show '-> /home/azureuser/blob/...'
+ln -sfn ~/blob/logs cloud/logs
+ls -la data checkpoints cloud/logs      # each -> /home/azureuser/blob/...
 ```
 
-> If a node recycle wipes `~/SATG`, just re-clone and re-run the 3 `ln -sfn` lines —
-> your data and checkpoints are still on blob.
+Private repo? Clone with a token:
+`git clone -b azure-ml-runbook https://<user>:<PAT>@github.com/aadisaraf/SATG.git SATG`
+
+---
+
+## 4. Python + environment
+
+☁️ **on the node** — this node has `python3` but no bare `python`; the scripts call
+`python`/`pip`, so alias them, then run setup:
+
+```bash
+sudo ln -sf "$(command -v python3)" /usr/local/bin/python
+sudo ln -sf "$(command -v pip3)"    /usr/local/bin/pip
+cd ~/SATG && bash cloud/setup.sh        # installs deps, verifies CUDA -> ">>> GPU READY <<<"
+```
 
 ---
 
 ## 5. Kaggle credentials (for the two Cityscapes datasets)
 
-Token from <https://www.kaggle.com/settings/account> → **Create New API Token**.
-
-🖥️ **PowerShell (local)** — upload it:
+🖥️ **PowerShell (local)** — upload your token (from kaggle.com → Settings → Create
+New API Token):
 
 ```powershell
 scp -i $SATG_KEY -P $SATG_PORT "$HOME\Downloads\kaggle.json" "$($SATG_USER)@$($SATG_HOST):~/kaggle.json"
 ```
 
-☁️ **Bash (on the node):**
+☁️ **on the node:**
 
 ```bash
 mkdir -p ~/.kaggle && mv ~/kaggle.json ~/.kaggle/kaggle.json && chmod 600 ~/.kaggle/kaggle.json
@@ -203,93 +152,81 @@ mkdir -p ~/.kaggle && mv ~/kaggle.json ~/.kaggle/kaggle.json && chmod 600 ~/.kag
 
 ---
 
-## 6. Environment setup
+## 6. Download GTA5 — parallel, local-staged (fast)
 
-☁️ **Bash (on the node):**
+TU Darmstadt throttles each connection to ~1.3 MB/s (sequential ≈ 14 h). The
+parallel downloader fetches parts concurrently, **staging zips on local `/mnt`**
+(not through blobfuse — writing big files straight to the mount fails with curl-23)
+and moving only extracted PNGs to blob. ☁️ **on the node:**
 
 ```bash
+sudo mkdir -p /mnt/gta5_zips && sudo chown "$USER" /mnt/gta5_zips
 cd ~/SATG
-bash cloud/setup.sh          # GPU check + installs requirements.txt -> ">>> GPU READY <<<"
+tmux new -s gta5
+PAR=4 bash cloud/download_gta5_parallel.sh
+# Ctrl-B D to detach; tmux attach -t gta5 to check
 ```
 
-If PyTorch reports CUDA unavailable, reinstall the matching build (check `nvidia-smi`):
+Expect 4 parts at once, ~4–5 MB/s aggregate → **~3–4 h**. Prints `[NN] done` per part
+(10 total), then `=== GTA5 download complete ===`. Resume-safe: re-run to continue.
+Monitor from another shell:
 
 ```bash
-pip install --index-url https://download.pytorch.org/whl/cu124 torch torchvision
+echo "images: $(find ~/blob/data/GTA5/images -name '*.png' | wc -l) / 24966"
+df -h /mnt      # keep well under full; if it climbs, use PAR=3
 ```
 
 ---
 
-## 7. Download data + precompute heatmaps (writes to blob)
+## 7. Cityscapes + heatmaps, then grow the cache
 
-Everything below writes through the symlinks onto blob, so it persists.
-☁️ **Bash (on the node):**
+☁️ **on the node** — finish data prep (skips the now-present GTA5 download; does GTA5
+label→trainId mapping, your 2 Kaggle Cityscapes datasets, and the 95 GB of heatmaps):
 
 ```bash
 cd ~/SATG
-export TMPDIR=/mnt                       # use the temp disk for extraction scratch
+export TMPDIR=/mnt
 tmux new -s satg-data
-bash cloud/prepare_data.sh 2>&1 | tee cloud/logs/prepare_data.log
-# detach: Ctrl-B then D    |    reattach: tmux attach -t satg-data
+bash cloud/prepare_data.sh
+# wait for: >>> CITYSCAPES READY <<<   and   >>> HEATMAP VALIDATION PASSED <<<
 ```
 
-What it does (all resume-safe — re-running continues where it stopped):
-
-1. **GTA5** — `cloud/download_gta5.sh`: 10 image + 10 label ZIPs (~57 GB) →
-   `data/GTA5/{images,labels}` (24,966 each), then maps IDs → Cityscapes trainIds.
-2. **Cityscapes (your 2 Kaggle datasets)** — `cloud/download_cityscapes.sh`, in this
-   order, laid out exactly as the loaders expect:
-   | Kaggle slug | → lands at (on blob) |
-   |-------------|-----------|
-   | `chrisviviers/cityscapes-leftimg8bit-trainvaltest` | `data/cityscapes/leftImg8bit/{train,val,test}/…` |
-   | `kclaude/gtfine-trainvaltest` | `data/cityscapes/gtFine/{train,val}/…` |
-   Then auto-generates `*_gtFine_labelTrainIds.png` from the label PNGs.
-3. **Heatmaps** — 4 structural-prior components for all 2,975 train images (~95 GB
-   of `.npy`, written next to the images on blob).
-4. **Validation** — asserts 2,975 train images and 11,900 heatmaps.
-
-Expected tail: `>>> CITYSCAPES READY <<<` … `>>> HEATMAP VALIDATION PASSED <<<`.
-
-> Uploading ~165 GB to blob takes a while, and blobfuse write throughput varies.
-> It's a one-time cost; subsequent runs read from blob (cached on `/mnt`).
-
----
-
-## 8. WandB
-
-☁️ **Bash (on the node):** `wandb login` (token at <https://wandb.ai/authorize>).
-Offline instead? `wandb offline`, then `wandb sync cloud/logs` later.
-
----
-
-## 9. Train (eviction/recycle-safe)
-
-☁️ **Bash (on the node):**
+Then **bump the blob cache back up for training read speed** (GTA5 staging is done,
+so `/mnt` is free):
 
 ```bash
+sudo rm -rf /mnt/gta5_zips
+sed -i 's/max-size-mb: 4000/max-size-mb: 40000/' ~/blobfuse2.yaml
+fusermount -u ~/blob; blobfuse2 mount ~/blob --config-file="$HOME/blobfuse2.yaml"
+findmnt ~/blob
+```
+
+---
+
+## 8. Train (eviction/recycle-safe)
+
+☁️ **on the node:**
+
+```bash
+wandb login                       # or: wandb offline
 cd ~/SATG
 tmux new -s satg-train
-bash cloud/run_phase8.sh      # baselines (6 runs)
-bash cloud/run_phase9.sh      # SATG + ablations (~40 runs)
+bash cloud/run_phase8.sh          # 6 baselines
+bash cloud/run_phase9.sh          # ~35 SATG + ablation runs
 ```
 
-Detach: **Ctrl-B, D**. Reattach: `tmux attach -t satg-train`.
-
-**If the node recycles** (or you re-attach after a drop): reconnect, remount blob if
-needed, re-clone code + re-link if `~/SATG` was wiped, then re-run the **same**
-command. Finished runs (`checkpoints/<run>/.done` on blob) skip; the interrupted run
-resumes from its `last.pth`; the rest run fresh.
+Detach Ctrl-B D. **After any recycle/drop**, reconnect and re-run the *same* command:
+finished runs (`checkpoints/<run>/.done`) skip, the interrupted one resumes from
+`last.pth` via `--resume`, the rest run fresh. Recovery if the node was wiped:
 
 ```bash
-# after a recycle, the recovery is just:
 blobfuse2 mount ~/blob --config-file=$HOME/blobfuse2.yaml    # if unmounted
-cd ~/SATG || (cd ~ && git clone <repo> SATG && cd SATG && \
+cd ~/SATG || (cd ~ && git clone -b azure-ml-runbook https://github.com/aadisaraf/SATG.git SATG && cd SATG && \
   ln -sfn ~/blob/data data && ln -sfn ~/blob/checkpoints checkpoints && ln -sfn ~/blob/logs cloud/logs)
 bash cloud/run_phase9.sh
 ```
 
-Single run / overrides:
-
+Single run / ablation:
 ```bash
 python -m training.trainer --config configs/satg_hard.yaml --resume seed=42
 python -m training.trainer --config configs/satg_hard.yaml \
@@ -297,151 +234,76 @@ python -m training.trainer --config configs/satg_hard.yaml \
     trust_gate.tau_conf=0.95 trust_gate.tau_struct=0.70 seed=42
 ```
 
-### After training — figures + tables (Phase 10)
-
-Once runs finish, generate the repo's analysis outputs (all write to blob via the
-`visualizations/` dir if you symlink it, or local + download). ☁️ **on the node:**
-
-```bash
-# 1. Qualitative 1x5 trust-mask panels for the primary SATG variants
-for v in satg_hard satg_soft_weight satg_soft_label; do
-  python -m visualization.visualize \
-      --checkpoint checkpoints/${v}_seed42/best.pth \
-      --config configs/${v}.yaml \
-      --num_images 10 --output_dir visualizations/
-done
-
-# 2. Trust-coverage-over-time plots from each run's metrics.csv
-python - <<'PY'
-import glob, os
-from visualization.plot_metrics import plot_coverage_over_time
-os.makedirs("visualizations/training_metrics", exist_ok=True)
-for csv in glob.glob("checkpoints/*/metrics.csv"):
-    run = os.path.basename(os.path.dirname(csv))
-    out = f"visualizations/training_metrics/{run}_coverage.png"
-    try:
-        plot_coverage_over_time(csv, out); print("wrote", out)
-    except Exception as e:
-        print("skip", run, "-", e)
-PY
-
-# 3. Per-experiment best mIoU with mean±std across seeds (for EXPERIMENTS.md)
-python - <<'PY'
-import glob, os, csv, re, statistics as st
-from collections import defaultdict
-runs = defaultdict(list)
-for f in glob.glob("checkpoints/*/metrics.csv"):
-    run = os.path.basename(os.path.dirname(f))
-    exp = re.sub(r"_seed\d+$", "", run)
-    best = 0.0
-    for row in csv.DictReader(open(f)):
-        v = row.get("val_miou", "")
-        if v not in ("", None): best = max(best, float(v))
-    if best: runs[exp].append(best)
-print(f"{'experiment':32} {'n':>2} {'mean_mIoU':>9} {'std':>6}")
-for exp, xs in sorted(runs.items()):
-    s = st.pstdev(xs) if len(xs) > 1 else 0.0
-    print(f"{exp:32} {len(xs):>2} {sum(xs)/len(xs):9.2f} {s:6.2f}")
-PY
-```
-
-`run_phase8.sh` / `run_phase9.sh` also print their own summary tables, and every run
-is in WandB under `satg-uda`. The final `README.md` / `EXPERIMENTS.md` write-ups
-(Phase 10 T049–T_FINAL) are manual authoring from these numbers.
-
-Optional — validate the code with the unit tests (no GPU needed, fast):
-
-```bash
-pytest -q
-```
+> ⚠️ Training reads GTA5 + heatmaps (~165 GB working set) from blob through a ~40 GB
+> cache, so cache-miss reads hit the network — expect it slower than local-disk time
+> estimates. If too slow: bigger-temp-disk SKU (larger cache) or trim scope.
 
 ---
 
-## 10. Monitor
+## 9. Monitor + analysis
 
-☁️ **Bash (on the node):**
+☁️ **on the node:**
 
 ```bash
 tail -f cloud/logs/phase8_source_only_seed42.log
 grep "★ New best" cloud/logs/*.log | tail
 watch -n2 nvidia-smi
-df -h /mnt/blobcache          # keep an eye on cache disk usage
+```
+
+After training — Phase 10 figures/tables:
+```bash
+for v in satg_hard satg_soft_weight satg_soft_label; do
+  python -m visualization.visualize --checkpoint checkpoints/${v}_seed42/best.pth \
+      --config configs/${v}.yaml --num_images 10 --output_dir visualizations/
+done
+# coverage plots + per-experiment mIoU mean±std: see snippets committed in this file's history
+pytest -q          # optional: validate the code
 ```
 
 ---
 
-## 11. Get results
+## 10. Results + shutdown
 
-Checkpoints + logs are already on **blob** (durable). Two ways to retrieve:
-
-🖥️ **PowerShell (local)** — pull straight from blob (no node needed):
+🖥️ **PowerShell (local)** — pull from blob (durable, node not required):
 
 ```powershell
-az storage blob download-batch --account-name $SA --account-key $KEY `
-    -s satg-data/checkpoints -d .\checkpoints
-az storage blob download-batch --account-name $SA --account-key $KEY `
-    -s satg-data/logs -d .\cloud\logs
+$KEY = az storage account keys list -g pranav-rg -n $SA --query "[0].value" -o tsv
+az storage blob download-batch --account-name $SA --account-key $KEY -s satg-data/checkpoints -d .\checkpoints
+az storage blob download-batch --account-name $SA --account-key $KEY -s satg-data/logs        -d .\cloud\logs
 ```
 
-Or scp from the node's blob mount (while it's up):
-
-```powershell
-scp -i $SATG_KEY -P $SATG_PORT -r "$($SATG_USER)@$($SATG_HOST):~/blob/checkpoints/*" .\checkpoints\
-```
-
-**When done:** set the cluster **min nodes back to 0** (Studio → Compute) so it stops
-billing. Your data + checkpoints remain in the blob container.
+Then set the cluster **min nodes back to 0** (Studio) to stop billing. Blob data stays.
 
 ---
 
-## 12. Troubleshooting
+## 11. Troubleshooting
 
 | Symptom | Fix |
 |--------|-----|
-| **`export` / bash command fails in PowerShell** | You ran a ☁️ node command locally. Node commands go inside the SSH session; local env vars use `$NAME = "value"`. |
-| **`az` not recognized** | `winget install -e --id Microsoft.AzureCLI`, then **reopen** PowerShell. |
-| **SSH asks for a password** | `-i` points at a missing key — set `$SATG_KEY = "$HOME\.ssh\id_rsa_azureml"`. |
-| **blobfuse mount fails** | Re-run with `--foreground` to see the error. Common causes: wrong account/key, container name ≠ `satg-data`, or `/mnt/blobcache` missing. |
-| **Node vanished / SSH died mid-run** | Cluster scaled down. Set **min nodes = 1** (Step 0). Recover via the Step 9 recycle block; data/checkpoints are safe on blob. |
-| **Training very slow / high disk wait** | Working set > cache. Raise `file_cache.max-size-mb` if `/mnt` allows, use a bigger-temp-disk SKU, or cut scope (GTA5 subset / baselines only). |
-| **`No space left` during download** | Extraction scratch filled `/tmp`. `export TMPDIR=/mnt` before `prepare_data.sh`; keep `/mnt/blobcache` under the temp-disk size. |
-| **Cityscapes counts < 2975** | Kaggle mirror shipped a subset. `ls ~/blob/data/cityscapes/leftImg8bit/train`. |
-| **CUDA OOM** | Append `training.batch_size=2 training.crop_size="[384,384]"` to the run command. |
+| `export`/bash fails in PowerShell | That's a ☁️ node command; run it inside SSH. Local vars: `$X="y"`. |
+| SSH `Connection reset` mid-run | Reconnect with the keepalive flags (Step 1). Work in `tmux` so it survives. |
+| Node gone / `tmux ls` empty / `~/blob` missing after a drop | Cluster recycled the node — **set min nodes = 1**. Remount blob + re-clone (Step 8 recovery). Blob data is safe. |
+| `curl (23) Failure writing` on GTA5 | You wrote zips straight to blob. Use `download_gta5_parallel.sh` (stages on `/mnt`), and keep the cache at 4 GB during download. |
+| `python: command not found` | Run the `ln -sf` aliases in Step 4. |
+| blobfuse mount fails | `blobfuse2 mount ~/blob --config-file=$HOME/blobfuse2.yaml --foreground` to see the error; check account/key/container and `/mnt/blobcache`. |
+| `/mnt` fills during download | Lower to `PAR=3`; ensure cache is 4 GB (`grep max-size-mb ~/blobfuse2.yaml`). |
+| CUDA OOM | Append `training.batch_size=2 training.crop_size="[384,384]"`. |
 
 ---
 
-## Appendix — quickstart
-
-🖥️ **PowerShell (local):**
-
-```powershell
-$SATG_HOST="20.125.122.201"; $SATG_PORT="50000"; $SATG_USER="azureuser"
-$SATG_KEY="$HOME\.ssh\id_rsa_azureml"; $RG="pranav-rg"; $LOC="westus3"
-# (Studio: set chesstraining min nodes = 1)
-az login
-$SA="satg"+(Get-Random -Maximum 999999)
-az storage account create -g $RG -n $SA -l $LOC --sku Standard_LRS --kind StorageV2
-$KEY=az storage account keys list -g $RG -n $SA --query "[0].value" -o tsv
-az storage container create --account-name $SA --account-key $KEY -n satg-data
-Write-Host "ACCOUNT: $SA`nKEY: $KEY"
-ssh -i $SATG_KEY -p $SATG_PORT "$($SATG_USER)@$($SATG_HOST)"
-```
-
-☁️ **Bash (on the node), after SSH:**
+## Appendix — one-shot bring-up (after mount + creds are set)
 
 ```bash
-# mount blob (after editing ~/blobfuse2.yaml with your account+key — see Step 3)
-sudo mkdir -p /mnt/blobcache && sudo chown "$USER:$USER" /mnt/blobcache
-mkdir -p ~/blob && blobfuse2 mount ~/blob --config-file=$HOME/blobfuse2.yaml
-mkdir -p ~/blob/data ~/blob/checkpoints ~/blob/logs
-cd ~ && git clone <repo> SATG && cd ~/SATG
+# fresh node, blob already mounted at ~/blob with creds in ~/blobfuse2.yaml
+sudo ln -sf "$(command -v python3)" /usr/local/bin/python
+sudo ln -sf "$(command -v pip3)"    /usr/local/bin/pip
+cd ~ && git clone -b azure-ml-runbook https://github.com/aadisaraf/SATG.git SATG && cd ~/SATG
+rm -rf data checkpoints cloud/logs
 ln -sfn ~/blob/data data && ln -sfn ~/blob/checkpoints checkpoints && ln -sfn ~/blob/logs cloud/logs
-mkdir -p ~/.kaggle && chmod 600 ~/.kaggle/kaggle.json      # after scp'ing token
 bash cloud/setup.sh
-export TMPDIR=/mnt
-tmux new -s satg
-bash cloud/prepare_data.sh
-wandb login
-bash cloud/run_phase8.sh
-bash cloud/run_phase9.sh
+mkdir -p ~/.kaggle && chmod 600 ~/.kaggle/kaggle.json     # after scp'ing token
+sudo mkdir -p /mnt/gta5_zips && sudo chown "$USER" /mnt/gta5_zips
+tmux new -s gta5   # then: PAR=4 bash cloud/download_gta5_parallel.sh
+# after GTA5: bump cache to 40000 + remount, then: bash cloud/prepare_data.sh
+# then: wandb login && bash cloud/run_phase8.sh && bash cloud/run_phase9.sh
 ```
