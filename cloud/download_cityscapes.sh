@@ -60,20 +60,26 @@ echo ""
 # ------------------------------------------------------------------
 if ! command -v kaggle &> /dev/null; then
     echo "--- Installing kaggle CLI ---"
-    pip install --quiet kaggle
+    pip install --quiet --upgrade kaggle
 fi
 
-if [ ! -f "$HOME/.kaggle/kaggle.json" ] && { [ -z "${KAGGLE_USERNAME:-}" ] || [ -z "${KAGGLE_KEY:-}" ]; }; then
+# Accept any of Kaggle's credential mechanisms:
+#   - classic:  ~/.kaggle/kaggle.json          OR  KAGGLE_USERNAME + KAGGLE_KEY
+#   - newer:    ~/.kaggle/access_token (KGAT_) OR  KAGGLE_API_TOKEN
+if [ ! -f "$HOME/.kaggle/kaggle.json" ] \
+   && [ ! -f "$HOME/.kaggle/access_token" ] \
+   && [ -z "${KAGGLE_API_TOKEN:-}" ] \
+   && { [ -z "${KAGGLE_USERNAME:-}" ] || [ -z "${KAGGLE_KEY:-}" ]; }; then
     echo "ERROR: No Kaggle credentials found." >&2
     echo "  Provide ONE of the following, then re-run:" >&2
-    echo "    1) ~/.kaggle/kaggle.json   (from https://www.kaggle.com/settings/account)" >&2
-    echo "         mkdir -p ~/.kaggle && mv kaggle.json ~/.kaggle/ && chmod 600 ~/.kaggle/kaggle.json" >&2
-    echo "    2) export KAGGLE_USERNAME=<you> KAGGLE_KEY=<token>" >&2
+    echo "    1) ~/.kaggle/kaggle.json         (classic username+key token)" >&2
+    echo "    2) export KAGGLE_USERNAME=<you> KAGGLE_KEY=<key>" >&2
+    echo "    3) ~/.kaggle/access_token        (newer KGAT_ token)" >&2
+    echo "    4) export KAGGLE_API_TOKEN=KGAT_...  (newer token)" >&2
     exit 1
 fi
-if [ -f "$HOME/.kaggle/kaggle.json" ]; then
-    chmod 600 "$HOME/.kaggle/kaggle.json" 2>/dev/null || true
-fi
+[ -f "$HOME/.kaggle/kaggle.json" ]   && chmod 600 "$HOME/.kaggle/kaggle.json"   2>/dev/null || true
+[ -f "$HOME/.kaggle/access_token" ] && chmod 600 "$HOME/.kaggle/access_token" 2>/dev/null || true
 
 # ------------------------------------------------------------------
 # Helper: move a discovered subtree (leftImg8bit / gtFine) into ROOT
