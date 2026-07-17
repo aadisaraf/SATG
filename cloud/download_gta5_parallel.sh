@@ -72,7 +72,9 @@ do_part() {
         if ! unzip -t "$z" >/dev/null 2>&1; then
             echo "  [$i] $kind zip corrupt after download" >&2; return 1
         fi
-        local tmp; tmp="$(mktemp -d -p "$STAGE")"
+        # Extract into a temp dir ON THE OUTPUT FS (blob), not /mnt, so the only
+        # thing /mnt holds is the zip itself — lets more parts run concurrently.
+        local tmp; tmp="$(mktemp -d -p "$OUT_DIR")"
         unzip -q -o "$z" -d "$tmp"
         if [ -d "$tmp/$kind" ]; then
             mv "$tmp/$kind/"*.png "$OUT_DIR/$kind/" 2>/dev/null || true
