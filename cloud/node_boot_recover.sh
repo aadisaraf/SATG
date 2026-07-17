@@ -29,10 +29,15 @@ echo "=== $(date -u) boot recovery ==="
 sudo mkdir -p /mnt/blobcache /mnt/gta5_zips /mnt/tmp
 sudo chown "$USER:$USER" /mnt/blobcache /mnt/gta5_zips /mnt/tmp
 
-# 2. remount blob if needed
-if findmnt "$HOME/blob" >/dev/null 2>&1; then
-    echo "blob already mounted"
+# 2. remount blob if not mounted OR stale. After a preemption the mount can go
+# stale: findmnt still lists it but I/O fails with "Transport endpoint is not
+# connected". Test with a real listing, and force-unmount before remounting.
+if findmnt "$HOME/blob" >/dev/null 2>&1 && ls "$HOME/blob" >/dev/null 2>&1; then
+    echo "blob mounted and healthy"
 else
+    echo "blob missing or stale — remounting"
+    fusermount -u "$HOME/blob" 2>/dev/null || true
+    sudo umount -l "$HOME/blob" 2>/dev/null || true
     blobfuse2 mount "$HOME/blob" --config-file="$HOME/blobfuse2.yaml" && echo "blob remounted"
 fi
 
