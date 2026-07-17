@@ -29,6 +29,17 @@ echo "=== $(date -u) boot recovery ==="
 sudo mkdir -p /mnt/blobcache /mnt/gta5_zips /mnt/tmp
 sudo chown "$USER:$USER" /mnt/blobcache /mnt/gta5_zips /mnt/tmp
 
+# 1b. fast local NVMe (ephemeral — reformat+mount after a preemption). Holds the
+# blobfuse read-cache so training reads are local NVMe, not over the network.
+if [ -b /dev/nvme0n1 ] && ! mountpoint -q /nvme; then
+    sudo mkdir -p /nvme
+    sudo mount /dev/nvme0n1 /nvme 2>/dev/null \
+        || { sudo mkfs.ext4 -F /dev/nvme0n1 && sudo mount /dev/nvme0n1 /nvme; }
+    sudo chown "$USER:$USER" /nvme
+    echo "nvme mounted at /nvme"
+fi
+[ -d /nvme ] && mkdir -p /nvme/blobcache
+
 # 2. remount blob if not mounted OR stale. After a preemption the mount can go
 # stale: findmnt still lists it but I/O fails with "Transport endpoint is not
 # connected". Test with a real listing, and force-unmount before remounting.
@@ -50,6 +61,14 @@ if [ -d "$HOME/SATG/data" ]; then
     ln -sfn "$HOME/blob/checkpoints"     "$HOME/SATG/checkpoints"
     ln -sfn "$HOME/blob/logs"            "$HOME/SATG/cloud/logs"
     echo "symlinks ensured"
+fi
+
+# 2c. warm the NVMe read-cache in the background (idempotent). After a preemption
+# the cache is empty; this reads every data file once so training reads are fast.
+if [ -d /nvme/blobcache ] && findmnt "$HOME/blob" >/dev/null 2>&1; then
+    ( find "$HOME/blob/data" -type f -print0 2>/dev/null \
+        | xargs -0 -P 16 cat >/dev/null 2>&1 & ) 2>/dev/null
+    echo "nvme cache pre-warm started in background"
 fi
 
 # 3. relaunch the recorded task, once
