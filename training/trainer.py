@@ -148,7 +148,7 @@ def main() -> None:
 
     # ── Device and models ─────────────────────────────────────────────────
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    student = SegmentationModel(cfg).to(device)
+    student = SegmentationModel(num_classes=cfg.model.num_classes).to(device)
     ema = EMAModel(student, cfg.ema.momentum)
     ema.model = ema.model.to(device)
 
