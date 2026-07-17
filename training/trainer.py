@@ -210,28 +210,37 @@ def main() -> None:
     source_dataset = GTA5Dataset(cfg)
     target_dataset = CityscapesDataset(cfg, split="train")
     val_dataset = CityscapesDataset(cfg, split="val")
+    # Throughput-only DataLoader settings (no effect on results): keep workers
+    # alive across epochs and prefetch more batches to hide data-load latency.
+    _nw = cfg.training.num_workers
+    _loader_kw = (
+        {"persistent_workers": True, "prefetch_factor": 4} if _nw > 0 else {}
+    )
     source_loader = DataLoader(
         source_dataset,
         batch_size=cfg.training.batch_size,
         shuffle=True,
-        num_workers=cfg.training.num_workers,
+        num_workers=_nw,
         pin_memory=True,
         drop_last=True,
+        **_loader_kw,
     )
     target_loader = DataLoader(
         target_dataset,
         batch_size=cfg.training.batch_size,
         shuffle=True,
-        num_workers=cfg.training.num_workers,
+        num_workers=_nw,
         pin_memory=True,
         drop_last=True,
+        **_loader_kw,
     )
     val_loader = DataLoader(
         val_dataset,
-        batch_size=1,
+        batch_size=cfg.training.get("val_batch_size", 4),
         shuffle=False,
-        num_workers=cfg.training.num_workers,
+        num_workers=_nw,
         pin_memory=True,
+        **_loader_kw,
     )
 
     source_iter = iter(source_loader)

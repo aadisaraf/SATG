@@ -47,7 +47,7 @@ def compute_miou(model, dataloader, device, num_classes=19, ignore_index=255):
             - ``per_class_iou``: dict mapping class name to IoU (percentage).
     """
     model.eval()
-    confusion = torch.zeros(num_classes, num_classes, dtype=torch.long)
+    confusion = torch.zeros(num_classes, num_classes, dtype=torch.long, device=device)
 
     with torch.no_grad():
         for imgs, labels in dataloader:
@@ -63,8 +63,16 @@ def compute_miou(model, dataloader, device, num_classes=19, ignore_index=255):
                 .argmax(1)
             )
             mask = labels != ignore_index
-            for t, p in zip(labels[mask].cpu(), preds[mask].cpu()):
-                confusion[t, p] += 1
+            t = labels[mask].to(torch.int64)
+            p = preds[mask].to(torch.int64)
+            # Vectorized confusion-matrix accumulation — identical result to the
+            # per-pixel Python loop, but ~1000x faster (one bincount vs millions
+            # of scalar index-updates).
+            idx = t * num_classes + p
+            binc = torch.bincount(idx, minlength=num_classes * num_classes)
+            confusion += binc.reshape(num_classes, num_classes)
+
+    confusion = confusion.cpu()
 
     iou = {}
     for c in range(num_classes):
