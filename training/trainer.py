@@ -55,14 +55,14 @@ def main() -> None:
     )
     parser.add_argument(
         "--resume",
-        nargs="?",
-        const="auto",
+        action="store_true",
+        help="Resume from <save_dir>/last.pth if it exists (else start fresh).",
+    )
+    parser.add_argument(
+        "--resume_from",
         default=None,
         type=str,
-        help=(
-            "Resume training. Bare --resume auto-loads <save_dir>/last.pth; "
-            "pass a path to resume from a specific checkpoint."
-        ),
+        help="Resume from a specific checkpoint path (errors if it's missing).",
     )
     parser.add_argument("overrides", nargs="*")
     args = parser.parse_args()
@@ -95,20 +95,23 @@ def main() -> None:
     # its wandb run id is available before wandb.init(). Model/optimizer states
     # are applied further down, once those objects exist.
     resume_ckpt = None
-    if args.resume is not None:
-        resume_path = (
-            save_dir / "last.pth" if args.resume == "auto" else Path(args.resume)
-        )
-        if resume_path.is_file():
-            resume_ckpt = torch.load(resume_path, map_location="cpu")
-            print(
-                f"Resuming from {resume_path} "
-                f"(iteration {resume_ckpt.get('iteration', 0)})"
-            )
-        elif args.resume == "auto":
-            print(f"No checkpoint at {resume_path} — starting fresh.")
+    resume_path = None
+    if args.resume_from:
+        resume_path = Path(args.resume_from)
+        if not resume_path.is_file():
+            raise FileNotFoundError(f"--resume_from checkpoint not found: {resume_path}")
+    elif args.resume:
+        cand = save_dir / "last.pth"
+        if cand.is_file():
+            resume_path = cand
         else:
-            raise FileNotFoundError(f"--resume checkpoint not found: {resume_path}")
+            print(f"No checkpoint at {cand} — starting fresh.")
+    if resume_path is not None:
+        resume_ckpt = torch.load(resume_path, map_location="cpu")
+        print(
+            f"Resuming from {resume_path} "
+            f"(iteration {resume_ckpt.get('iteration', 0)})"
+        )
 
     if cfg.logging.backend == "wandb":
         wandb_run_id = (
