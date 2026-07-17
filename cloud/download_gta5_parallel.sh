@@ -56,8 +56,13 @@ fi
 # Each part is independent, so xargs runs PAR of these at once.
 do_part() {
     local i="$1"
-    # Skip if this part's images already look present (rough check by count).
-    local have; have=$(find "$OUT_DIR/images" -maxdepth 1 -name '*.png' | wc -l | tr -d ' ')
+    # Resume: a part that finished extraction leaves a marker on the output fs
+    # (blob), so restarts/preemptions skip it instead of re-downloading.
+    local marker="$OUT_DIR/.part_${i}_done"
+    if [ -f "$marker" ]; then
+        echo "  [$i] already done (marker) — skipping"
+        return 0
+    fi
     for kind in images labels; do
         local url="$BASE_URL/${i}_${kind}.zip"
         local z="$STAGE/${i}_${kind}.zip"
@@ -81,6 +86,7 @@ do_part() {
         fi
         rm -rf "$tmp" "$z"
     done
+    touch "$marker"
     echo "  [$i] done"
 }
 export -f do_part
