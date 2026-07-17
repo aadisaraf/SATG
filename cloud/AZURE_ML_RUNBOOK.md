@@ -108,13 +108,19 @@ mkdir -p ~/blob/data ~/blob/checkpoints ~/blob/logs
 ☁️ **on the node** — clone locally (cheap to re-clone after a recycle), symlink the
 heavy dirs onto blob:
 
+> **IMPORTANT:** `data/` is a Python package (the loaders + `label_mapping.py`).
+> Do **not** replace it with a symlink — only symlink its dataset SUBDIRS
+> (`data/GTA5`, `data/cityscapes`) onto blob, and keep the `.py` files.
+
 ```bash
 cd ~ && git clone -b azure-ml-runbook https://github.com/aadisaraf/SATG.git SATG && cd ~/SATG
-rm -rf data checkpoints cloud/logs
-ln -sfn ~/blob/data data
-ln -sfn ~/blob/checkpoints checkpoints
-ln -sfn ~/blob/logs cloud/logs
-ls -la data checkpoints cloud/logs      # each -> /home/azureuser/blob/...
+rm -rf checkpoints cloud/logs                    # these are outputs, safe to relink
+mkdir -p ~/blob/data/GTA5 ~/blob/data/cityscapes
+ln -sfn ~/blob/data/GTA5        data/GTA5        # datasets UNDER the package
+ln -sfn ~/blob/data/cityscapes  data/cityscapes
+ln -sfn ~/blob/checkpoints      checkpoints
+ln -sfn ~/blob/logs             cloud/logs
+ls -la data/ checkpoints cloud/logs             # data/ = 6 .py files + GTA5/cityscapes symlinks
 ```
 
 Private repo? Clone with a token:
@@ -220,9 +226,13 @@ finished runs (`checkpoints/<run>/.done`) skip, the interrupted one resumes from
 `last.pth` via `--resume`, the rest run fresh. Recovery if the node was wiped:
 
 ```bash
-blobfuse2 mount ~/blob --config-file=$HOME/blobfuse2.yaml    # if unmounted
-cd ~/SATG || (cd ~ && git clone -b azure-ml-runbook https://github.com/aadisaraf/SATG.git SATG && cd SATG && \
-  ln -sfn ~/blob/data data && ln -sfn ~/blob/checkpoints checkpoints && ln -sfn ~/blob/logs cloud/logs)
+# Simplest: node_boot_recover.sh remounts blob AND re-establishes the symlinks.
+bash ~/SATG/cloud/node_boot_recover.sh 2>/dev/null || {
+  blobfuse2 mount ~/blob --config-file=$HOME/blobfuse2.yaml    # if $HOME/SATG was wiped
+  cd ~ && git clone -b azure-ml-runbook https://github.com/aadisaraf/SATG.git SATG && cd SATG
+  mkdir -p ~/blob/data/GTA5 ~/blob/data/cityscapes
+  ln -sfn ~/blob/data/GTA5 data/GTA5 && ln -sfn ~/blob/data/cityscapes data/cityscapes
+  ln -sfn ~/blob/checkpoints checkpoints && ln -sfn ~/blob/logs cloud/logs; }
 bash cloud/run_phase9.sh
 ```
 
@@ -298,8 +308,10 @@ Then set the cluster **min nodes back to 0** (Studio) to stop billing. Blob data
 sudo ln -sf "$(command -v python3)" /usr/local/bin/python
 sudo ln -sf "$(command -v pip3)"    /usr/local/bin/pip
 cd ~ && git clone -b azure-ml-runbook https://github.com/aadisaraf/SATG.git SATG && cd ~/SATG
-rm -rf data checkpoints cloud/logs
-ln -sfn ~/blob/data data && ln -sfn ~/blob/checkpoints checkpoints && ln -sfn ~/blob/logs cloud/logs
+rm -rf checkpoints cloud/logs
+mkdir -p ~/blob/data/GTA5 ~/blob/data/cityscapes
+ln -sfn ~/blob/data/GTA5 data/GTA5 && ln -sfn ~/blob/data/cityscapes data/cityscapes
+ln -sfn ~/blob/checkpoints checkpoints && ln -sfn ~/blob/logs cloud/logs
 bash cloud/setup.sh
 mkdir -p ~/.kaggle && chmod 600 ~/.kaggle/kaggle.json     # after scp'ing token
 sudo mkdir -p /mnt/gta5_zips && sudo chown "$USER" /mnt/gta5_zips

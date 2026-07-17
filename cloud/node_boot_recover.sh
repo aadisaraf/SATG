@@ -35,6 +35,17 @@ else
     blobfuse2 mount "$HOME/blob" --config-file="$HOME/blobfuse2.yaml" && echo "blob remounted"
 fi
 
+# 2b. re-establish dataset/output symlinks (data/ is a Python package, so only
+# its GTA5/ and cityscapes/ SUBDIRS are symlinked onto blob — never data/ itself).
+if [ -d "$HOME/SATG/data" ]; then
+    mkdir -p "$HOME/blob/data/GTA5" "$HOME/blob/data/cityscapes"
+    ln -sfn "$HOME/blob/data/GTA5"       "$HOME/SATG/data/GTA5"
+    ln -sfn "$HOME/blob/data/cityscapes" "$HOME/SATG/data/cityscapes"
+    ln -sfn "$HOME/blob/checkpoints"     "$HOME/SATG/checkpoints"
+    ln -sfn "$HOME/blob/logs"            "$HOME/SATG/cloud/logs"
+    echo "symlinks ensured"
+fi
+
 # 3. relaunch the recorded task, once
 TASK="$HOME/.satg_task"
 if [ -f "$TASK" ]; then
