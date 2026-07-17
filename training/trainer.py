@@ -25,7 +25,7 @@ import torch.nn.functional as F
 import wandb
 from omegaconf import OmegaConf
 from torch.utils.data import DataLoader
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 from tqdm import tqdm
 
 from data.gta5_loader import GTA5Dataset
@@ -187,7 +187,7 @@ def main() -> None:
         power=cfg.training.poly_power,
     )
 
-    scaler = GradScaler(enabled=cfg.training.use_amp)
+    scaler = GradScaler("cuda", enabled=cfg.training.use_amp)
 
     # ── Restore state from resume checkpoint ──────────────────────────────
     start_iter = 0
