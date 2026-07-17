@@ -191,7 +191,8 @@ label→trainId mapping, your 2 Kaggle Cityscapes datasets, and the 95 GB of hea
 
 ```bash
 cd ~/SATG
-export TMPDIR=/mnt
+sudo mkdir -p /mnt/tmp && sudo chown "$USER" /mnt/tmp    # user-owned scratch (mktemp needs it)
+export TMPDIR=/mnt/tmp
 tmux new -s satg-data
 bash cloud/prepare_data.sh
 # wait for: >>> CITYSCAPES READY <<<   and   >>> HEATMAP VALIDATION PASSED <<<

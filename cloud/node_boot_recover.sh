@@ -24,9 +24,10 @@ LOG="$HOME/satg_boot.log"
 exec >> "$LOG" 2>&1
 echo "=== $(date -u) boot recovery ==="
 
-# 1. temp-disk dirs (wiped on every preemption; /mnt is root-owned)
-sudo mkdir -p /mnt/blobcache /mnt/gta5_zips
-sudo chown "$USER:$USER" /mnt/blobcache /mnt/gta5_zips
+# 1. temp-disk dirs (wiped on every preemption; /mnt is root-owned). /mnt/tmp is
+# the user-owned scratch used as TMPDIR (Cityscapes unzip, extraction temps).
+sudo mkdir -p /mnt/blobcache /mnt/gta5_zips /mnt/tmp
+sudo chown "$USER:$USER" /mnt/blobcache /mnt/gta5_zips /mnt/tmp
 
 # 2. remount blob if needed
 if findmnt "$HOME/blob" >/dev/null 2>&1; then
