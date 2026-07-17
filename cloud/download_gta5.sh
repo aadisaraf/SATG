@@ -47,6 +47,13 @@ CUR_IMAGES=$(find "$OUT_DIR/images" -maxdepth 1 -name "*.png" 2>/dev/null | wc -
 CUR_LABELS=$(find "$OUT_DIR/labels" -maxdepth 1 -name "*.png" 2>/dev/null | wc -l | tr -d ' ')
 echo "Existing: $CUR_IMAGES images / $CUR_LABELS labels"
 
+# Already complete — nothing to download (avoids re-fetching part 10 when the
+# count is an exact multiple, e.g. 24966/2496 rounds to "start at part 10").
+if [ "$CUR_IMAGES" -ge "$TOTAL_IMAGES" ] && [ "$CUR_LABELS" -ge "$TOTAL_IMAGES" ]; then
+    echo "GTA5 already complete — skipping download."
+    exit 0
+fi
+
 # Calculate starting part from existing file count
 START_PART=$((CUR_IMAGES / IMAGES_PER_PART + 1))
 if [ "$START_PART" -gt 10 ]; then START_PART=10; fi
