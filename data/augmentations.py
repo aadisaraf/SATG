@@ -100,8 +100,24 @@ class SourceAugment(_BaseAugment):
     def _centre_crop(
         image: np.ndarray, label: np.ndarray, h: int, w: int
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """Centre-crop image and label consistently."""
+        """Centre-crop image and label consistently to exactly (h, w).
+
+        If the (possibly down-scaled) input is smaller than the crop in any
+        dimension, reflect-pad it up first — otherwise plain slicing returns an
+        undersized crop, and batching tensors of different sizes crashes the
+        DataLoader collate ("Trying to resize storage that is not resizable").
+        """
         cur_h, cur_w = image.shape[:2]
+        pad_h = max(0, h - cur_h)
+        pad_w = max(0, w - cur_w)
+        if pad_h or pad_w:
+            image = cv2.copyMakeBorder(
+                image, 0, pad_h, 0, pad_w, cv2.BORDER_REFLECT_101
+            )
+            label = cv2.copyMakeBorder(
+                label, 0, pad_h, 0, pad_w, cv2.BORDER_REFLECT_101
+            )
+            cur_h, cur_w = image.shape[:2]
         y_start = max(0, (cur_h - h) // 2)
         x_start = max(0, (cur_w - w) // 2)
         return (
