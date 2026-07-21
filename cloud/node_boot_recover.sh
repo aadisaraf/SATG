@@ -63,13 +63,10 @@ if [ -d "$HOME/SATG/data" ]; then
     echo "symlinks ensured"
 fi
 
-# 2c. warm the NVMe read-cache in the background (idempotent). After a preemption
-# the cache is empty; this reads every data file once so training reads are fast.
-if [ -d /nvme/blobcache ] && findmnt "$HOME/blob" >/dev/null 2>&1; then
-    ( find "$HOME/blob/data" -type f -print0 2>/dev/null \
-        | xargs -0 -P 16 cat >/dev/null 2>&1 & ) 2>/dev/null
-    echo "nvme cache pre-warm started in background"
-fi
+# 2c. (pre-warm removed) A 16-way parallel scan of 164 GB right after mount was
+# crashing the blobfuse daemon ("Transport endpoint is not connected"), killing
+# training. Training's own gentle 8-worker reads warm the NVMe cache lazily
+# instead — slower first epoch, but the mount stays alive.
 
 # 3. relaunch the recorded task, once
 TASK="$HOME/.satg_task"
