@@ -329,15 +329,18 @@ def main() -> None:
             )
 
         # ── Trust gate / target loss ──────────────────────────────────────
+        # trust_coverage is kept as a GPU tensor here and only .item()'d at
+        # logging steps — .item() forces a full CUDA sync, which costs real
+        # wall-clock every iteration. Log values are unchanged.
         if cfg.trust_gate.type == "hard":
             tw = hard_gate.compute_mask(confidence, tgt_heatmaps)
             target_loss = satg_loss(tgt_student_logits, pseudo_labels, tw)
-            trust_coverage = tw.mean().item()
+            trust_coverage_t = tw.mean()
 
         elif cfg.trust_gate.type == "soft_weight":
             tw = soft_weight_gate.compute_weights(confidence, tgt_heatmaps)
             target_loss = satg_loss(tgt_student_logits, pseudo_labels, tw)
-            trust_coverage = tw.mean().item()
+            trust_coverage_t = tw.mean()
 
         elif cfg.trust_gate.type == "soft_label":
             st = soft_label_mod.compute_soft_targets(
@@ -349,12 +352,7 @@ def main() -> None:
             target_loss = soft_label_kl_loss(
                 tgt_student_logits, st, cm
             )
-            trust_coverage = cm.float().mean().item()
-            with torch.no_grad():
-                T = soft_label_mod.compute_temperature(tgt_heatmaps)
-                mean_temp = (
-                    T[cm.bool()].mean().item() if cm.sum() > 0 else 0.0
-                )
+            trust_coverage_t = cm.float().mean()
 
         # ── Backward ──────────────────────────────────────────────────────
         total_loss = source_loss + cfg.training.lambda_target * target_loss
@@ -374,6 +372,15 @@ def main() -> None:
         # ── Logging ───────────────────────────────────────────────────────
         if iteration % cfg.logging.log_every == 0:
             lr = scheduler.get_last_lr()[-1]
+            trust_coverage = trust_coverage_t.item()
+            # mean temperature is a log-only diagnostic; computing it every
+            # iteration (incl. a GPU sync) wasted wall-clock — same values.
+            if cfg.trust_gate.type == "soft_label":
+                with torch.no_grad():
+                    T = soft_label_mod.compute_temperature(tgt_heatmaps)
+                    mean_temp = (
+                        T[cm.bool()].mean().item() if cm.sum() > 0 else 0.0
+                    )
             row = {
                 "iteration": iteration,
                 "total_loss": round(total_loss.item(), 6),

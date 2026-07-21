@@ -48,10 +48,13 @@ class EMAModel:
                 blended into the teacher.
         """
         with torch.no_grad():
-            for (_, tp), (_, sp) in zip(
-                self.model.named_parameters(), student.named_parameters()
-            ):
-                tp.data = self.momentum * tp.data + (1.0 - self.momentum) * sp.data
+            # Vectorized EMA: identical per-element math to the python loop
+            # (t = m*t + (1-m)*s) but issued as two fused multi-tensor kernels
+            # instead of hundreds of tiny ops — large CPU-overhead win.
+            t_params = [p for _, p in self.model.named_parameters()]
+            s_params = [p for _, p in student.named_parameters()]
+            torch._foreach_mul_(t_params, self.momentum)
+            torch._foreach_add_(t_params, s_params, alpha=1.0 - self.momentum)
         self.iteration += 1
 
     def state_dict(self) -> Dict[str, OrderedDict or int]:
