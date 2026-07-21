@@ -65,7 +65,7 @@ training:
   heatmap_root: null
   crop_size: [512, 512]
   batch_size: 4
-  num_workers: 4
+  num_workers: 16
   iterations: 40000
   eval_interval: 2000
   lambda_target: 1.0
@@ -75,7 +75,7 @@ training:
   poly_power: 0.9
   optimizer_momentum: 0.9
   weight_decay: 5.0e-4
-  use_amp: false
+  use_amp: true
   skip_heatmap: false
   label_suffix: _trainids.png
   gradient_clip_norm: 5.0
