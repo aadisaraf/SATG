@@ -105,10 +105,15 @@ class GTA5Dataset(Dataset):
             return self._rare_class_weights
 
         cache_key = hashlib.md5(str(self.root.resolve()).encode()).hexdigest()
-        cache_path = Path(f"/tmp/satg_rare_weights_{cache_key}.pt")
-        if cache_path.exists():
-            self._rare_class_weights = torch.load(cache_path, weights_only=True)
-            return self._rare_class_weights
+        # Cache to the dataset dir (persistent) rather than /tmp, which is wiped
+        # on every reboot/preemption — otherwise this full label scan reruns each
+        # time the node recycles. Fall back to /tmp if the dataset dir is read-only.
+        persistent = self.root / f".satg_rare_weights_{cache_key}.pt"
+        legacy = Path(f"/tmp/satg_rare_weights_{cache_key}.pt")
+        for cp in (persistent, legacy):
+            if cp.exists():
+                self._rare_class_weights = torch.load(cp, weights_only=True)
+                return self._rare_class_weights
 
         counts = torch.zeros(19, dtype=torch.float64)
         total_pixels = 0
@@ -117,9 +122,9 @@ class GTA5Dataset(Dataset):
             label_raw = cv2.imread(str(label_path), cv2.IMREAD_UNCHANGED)
             if label_raw is None or label_raw.ndim != 2:
                 continue
-            label = torch.from_numpy(label_raw).long()
-            for c in range(19):
-                counts[c] += (label == c).sum().item()
+            label = torch.from_numpy(label_raw).long().flatten()
+            # Vectorized per-class count (identical result to the 19-way loop).
+            counts += torch.bincount(label[label < 19], minlength=19).double()
             total_pixels += label.numel()
 
         # Inverse frequency with clipping
@@ -131,8 +136,12 @@ class GTA5Dataset(Dataset):
         weights = weights.clamp(0.1, 10.0).float()
         self._rare_class_weights = weights
 
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(self._rare_class_weights, cache_path)
+        # Persist to the dataset dir (survives reboots); fall back to /tmp.
+        try:
+            torch.save(self._rare_class_weights, persistent)
+        except OSError:
+            legacy.parent.mkdir(parents=True, exist_ok=True)
+            torch.save(self._rare_class_weights, legacy)
         return weights
 
     def __len__(self) -> int:
