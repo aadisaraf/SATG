@@ -216,12 +216,12 @@ def main() -> None:
     source_dataset = GTA5Dataset(cfg)
     target_dataset = CityscapesDataset(cfg, split="train")
     val_dataset = CityscapesDataset(cfg, split="val")
-    # Throughput-only DataLoader settings (no effect on results): keep workers
-    # alive across epochs and prefetch more batches to hide data-load latency.
+    # NOTE: persistent_workers/prefetch_factor were removed — combined with
+    # pin_memory they intermittently trigger "Trying to resize storage that is
+    # not resizable" (a torch shared-memory bug) after the first epoch. Data is
+    # on local NVMe so plain workers keep up fine.
     _nw = cfg.training.num_workers
-    _loader_kw = (
-        {"persistent_workers": True, "prefetch_factor": 4} if _nw > 0 else {}
-    )
+    _loader_kw = {}
     source_loader = DataLoader(
         source_dataset,
         batch_size=cfg.training.batch_size,
