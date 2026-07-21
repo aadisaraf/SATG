@@ -207,12 +207,15 @@ class CityscapesDataset(Dataset):
             raise FileNotFoundError(f"Failed to load image: {img_path}")
         img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB).astype(np.float32)
 
-        # --- Load heatmap ---
+        # --- Load heatmap (dummy when skipped; real otherwise) ---
+        # NOTE: the crop/augment below MUST run in both cases, otherwise
+        # skip_heatmap configs (source_only, mean_teacher) would train on the
+        # full-resolution target while everything else uses crop_size — an 8x
+        # cost and an unintended resolution mismatch vs. the config.
         if self.skip_heatmap:
-            img_tensor = torch.from_numpy((img_rgb - _MEAN) / _STD).permute(2, 0, 1).float()
-            return img_tensor, torch.zeros(1)
-
-        heatmap = self._load_and_combine_heatmap(img_path)
+            heatmap = np.zeros(img_rgb.shape[:2], dtype=np.float32)
+        else:
+            heatmap = self._load_and_combine_heatmap(img_path)
 
         # --- Augmentation (spatial only: flip + crop) ---
         if self.augment:
@@ -228,6 +231,8 @@ class CityscapesDataset(Dataset):
 
         # --- Convert to tensors ---
         img_tensor = torch.from_numpy(img_rgb).permute(2, 0, 1).float()
+        if self.skip_heatmap:
+            return img_tensor, torch.zeros(1)
         heatmap_tensor = torch.from_numpy(heatmap).float()
 
         return img_tensor, heatmap_tensor
