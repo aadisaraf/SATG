@@ -4,6 +4,17 @@ shell commands, and other important information, read the current plan
 at specs/001-structure-aware-trust-gating/plan.md
 <!-- SPECKIT END -->
 
+## Cold Email Outreach
+
+For drafting research mentorship cold emails, use `skill(name="cold-email-satg")`. This loads the established format, professor targeting criteria, and Composio Outlook draft flow used for the initial SATG outreach batch.
+
+Key reference files:
+- `cold-email-tracking/cold-email-prompt.md` — self-contained prompt for generating new emails
+- `cold-email-tracking/TRACKING.md` — professor tracker
+- `cold-email-tracking/emails-compiled.md` — example emails following the pattern
+
+**Before sending any email, always attach the research proposal PDF** at `cold-email-tracking/research-proposal.pdf`.
+
 ## graphify
 
 This project has a knowledge graph at `graphify-out/` with community structure, god nodes, and cross-file relationships.
