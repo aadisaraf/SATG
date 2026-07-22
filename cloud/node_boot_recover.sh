@@ -49,7 +49,16 @@ else
     echo "blob missing or stale — remounting"
     fusermount -u "$HOME/blob" 2>/dev/null || true
     sudo umount -l "$HOME/blob" 2>/dev/null || true
+    # blobfuse2 REFUSES to mount if its file_cache dir is non-empty
+    # ("temp directory not empty"), so clear it before every mount attempt.
+    rm -rf /nvme/blobcache/* /nvme/blobcache/.[!.]* 2>/dev/null || true
     blobfuse2 mount "$HOME/blob" --config-file="$HOME/blobfuse2.yaml" && echo "blob remounted"
+fi
+
+# Never launch training against a dead mount — it would just crash instantly.
+if ! ls "$HOME/blob" >/dev/null 2>&1; then
+    echo "blob still unavailable — NOT relaunching training"
+    exit 1
 fi
 
 # 2b. re-establish dataset/output symlinks (data/ is a Python package, so only
